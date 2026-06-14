@@ -1,6 +1,13 @@
 # OLIS Daily Dashboard
 
-A lightweight Flask web app that turns the Oregon Legislature's public
+### ▶ Live: https://bphelps1.github.io/olis-daily-dashboard/
+
+No install needed — just open the link above. It runs entirely in your browser,
+reading the public Oregon Legislature API directly. Share that URL with anyone.
+
+---
+
+A lightweight web app that turns the Oregon Legislature's public
 [OLIS OData API](https://api.oregonlegislature.gov/odata/odataservice.svc) into a
 daily legislative tracking dashboard. It shows what's happening on the House and
 Senate floors and in committees on any given day, with automatic flags for bills
@@ -41,7 +48,12 @@ No accounts, API keys, or database required — it reads the public API live.
 
 ## Running it
 
-### macOS (easiest)
+The easiest option is the **hosted link at the top** — nothing to install. The
+options below run it locally instead (offline-friendly, or for development). The
+hosted site is the static version in [`docs/`](docs/); the `dashboard/` folder is
+an equivalent Python/Flask implementation you can run yourself.
+
+### macOS (easiest local option)
 
 Double-click **`Run Dashboard.command`**. It installs the two dependencies on
 first run, starts the server, and opens <http://127.0.0.1:5001> in your browser.

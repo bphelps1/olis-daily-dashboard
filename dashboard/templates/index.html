@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OLIS Daily Dashboard</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="{{ url_for('static', filename='style.css') }}" rel="stylesheet">
+</head>
+<body>
+  <header class="app-header border-bottom">
+    <div class="container-fluid py-2 d-flex flex-wrap align-items-center gap-3">
+      <h1 class="h5 mb-0 me-auto">🏛️ OLIS Daily Dashboard</h1>
+
+      <div class="d-flex align-items-center gap-2">
+        <label class="form-label mb-0 small text-muted">Session</label>
+        <select id="session" class="form-select form-select-sm" style="width:auto">
+          <option value="auto" selected>Auto (by date)</option>
+          {% for s in sessions %}
+          <option value="{{ s.key }}">{{ s.key }} — {{ s.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="d-flex align-items-center gap-2">
+        <label class="form-label mb-0 small text-muted">📅 Date</label>
+        <input type="date" id="date" class="form-control form-control-sm" style="width:auto" value="{{ today }}">
+        <button id="todayBtn" class="btn btn-sm btn-outline-secondary">Today</button>
+      </div>
+    </div>
+
+    <div id="modeBanner" class="container-fluid pb-2"></div>
+  </header>
+
+  <main class="container-fluid py-3">
+    <ul class="nav nav-tabs" id="tabs" role="tablist">
+      <li class="nav-item"><button class="nav-link active" data-tab="floor-house"   data-endpoint="/api/floor/house">House Floor</button></li>
+      <li class="nav-item"><button class="nav-link"        data-tab="floor-senate"  data-endpoint="/api/floor/senate">Senate Floor</button></li>
+      <li class="nav-item"><button class="nav-link"        data-tab="comm-house"    data-endpoint="/api/committees/house">House Committees</button></li>
+      <li class="nav-item"><button class="nav-link"        data-tab="comm-senate"   data-endpoint="/api/committees/senate">Senate Committees</button></li>
+    </ul>
+
+    <div class="tab-body border border-top-0 rounded-bottom p-3" id="tabBody">
+      <div class="text-muted">Loading…</div>
+    </div>
+  </main>
+
+  <div class="legend container-fluid pb-4 small text-muted">
+    <strong>Flags:</strong>
+    🔴 25+ testimonies &nbsp;·&nbsp; ⚠️ Partisan committee vote &nbsp;·&nbsp; ✅ Bipartisan &nbsp;·&nbsp; 🔵 Floor split (a member crossed party lines)
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+  const state = {
+    session: document.getElementById('session').value,
+    date: document.getElementById('date').value,
+    today: "{{ today }}",
+    activeTab: 'floor-house',
+    cache: {},            // key: tab|session|date -> data
+    lastFetch: {},        // key -> timestamp
+    resolved: null,       // {session, name} reported by the last fetch (for Auto mode)
+  };
+
+  const tabBody = document.getElementById('tabBody');
+  const tabs = [...document.querySelectorAll('#tabs .nav-link')];
+  const tabMeta = {};
+  tabs.forEach(t => tabMeta[t.dataset.tab] = t.dataset.endpoint);
+
+  const isToday = () => state.date === state.today;
+  const cacheKey = tab => `${tab}|${state.session}|${state.date}`;
+
+  // ── formatting helpers ──────────────────────────────────────────────
+  function fmtTime(hhmm) {
+    if (!hhmm) return '';
+    let [h, m] = hhmm.split(':').map(Number);
+    const ap = h >= 12 ? 'PM' : 'AM';
+    h = h % 12 || 12;
+    return `${h}:${String(m).padStart(2,'0')} ${ap}`;
+  }
+  function fmtDate(iso) {
+    const [y,m,d] = iso.split('-').map(Number);
+    return new Date(y, m-1, d).toLocaleDateString(undefined,
+      {weekday:'long', year:'numeric', month:'long', day:'numeric'});
+  }
+  function esc(s){ return (s??'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+  function flagBadges(flags) {
+    if (!flags || !flags.length) return '';
+    return flags.map(f =>
+      `<span class="badge rounded-pill text-bg-${f.color} flag-badge">${f.icon||''} ${esc(f.label)}</span>`
+    ).join(' ');
+  }
+
+  function billRow(b) {
+    return `<tr>
+      <td class="text-nowrap"><a href="${b.url}" target="_blank" rel="noopener">${esc(b.bill)}</a></td>
+      <td>${esc(b.catchline)}</td>
+      <td class="text-nowrap">${esc(b.action)}</td>
+      <td class="text-nowrap">${esc(b.sponsor)}</td>
+      <td>${flagBadges(b.flags)}</td>
+    </tr>`;
+  }
+
+  function billTable(bills) {
+    if (!bills.length) return '';
+    return `<div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0">
+      <thead><tr><th>Bill</th><th>Catchline</th><th>Action</th><th>Sponsor</th><th>Flags</th></tr></thead>
+      <tbody>${bills.map(billRow).join('')}</tbody></table></div>`;
+  }
+
+  // ── mode banner ─────────────────────────────────────────────────────
+  function sessionTag() {
+    // When the session is auto-resolved from the date, show which one it landed on.
+    if (state.session !== 'auto' || !state.resolved) return '';
+    return `<span class="text-muted small ms-2">Session: ${esc(state.resolved.name || state.resolved.session)}</span>`;
+  }
+
+  function renderBanner() {
+    const el = document.getElementById('modeBanner');
+    const cmp = state.date < state.today ? 'past' : (state.date > state.today ? 'future' : 'today');
+    if (cmp === 'today') {
+      const t = state.lastFetch[cacheKey(state.activeTab)];
+      const ago = t ? Math.round((Date.now()-t)/60000) : 0;
+      el.innerHTML = `<span class="badge text-bg-success">● Live</span>
+        <span class="text-muted small ms-2">updated ${ago===0?'just now':ago+' min ago'}</span>` + sessionTag();
+    } else {
+      const label = cmp === 'future' ? 'upcoming' : 'historical';
+      const cls = cmp === 'future' ? 'text-bg-primary' : 'text-bg-secondary';
+      el.innerHTML = `<span class="badge ${cls}">Viewing: ${fmtDate(state.date)} (${label})</span>` + sessionTag();
+    }
+  }
+
+  // ── rendering: floor ────────────────────────────────────────────────
+  function renderFloor(data) {
+    if (data.error) return `<div class="alert alert-warning mb-0">${esc(data.error)}</div>`;
+    if (!data.bills.length)
+      return `<div class="text-muted py-4 text-center">No floor session scheduled.</div>`;
+    const convene = data.convene_time
+      ? `<div class="small text-muted mb-2">Convenes ${fmtTime(data.convene_time)}</div>` : '';
+    return convene + billTable(data.bills);
+  }
+
+  // ── rendering: committees ───────────────────────────────────────────
+  const SECTION = {active:'IN SESSION NOW', upcoming:'UPCOMING', concluded:'CONCLUDED', unknown:''};
+
+  function countLabel(c) {
+    if (c.bill_count > 0) return `${c.bill_count} bill${c.bill_count===1?'':'s'}`;
+    if (c.item_count > 0) return `${c.item_count} item${c.item_count===1?'':'s'}`;
+    return 'no agenda';
+  }
+
+  function topicsList(topics) {
+    if (!topics || !topics.length) return '';
+    const rows = topics.map(t => `<li class="list-group-item py-2">
+      ${t.kind?`<span class="badge text-bg-light text-dark me-2">${esc(t.kind)}</span>`:''}
+      ${esc(t.text)}</li>`).join('');
+    return `<ul class="list-group list-group-flush">${rows}</ul>`;
+  }
+
+  function committeeCard(c) {
+    const open = c.status === 'active';
+    const time = c.start_time ? fmtTime(c.start_time) : '';
+    const badge = c.status === 'active' ? '<span class="badge text-bg-success ms-2">IN SESSION</span>' : '';
+    return `<div class="committee card mb-2 status-${c.status} ${open?'open':''}" data-code="${esc(c.code)}">
+      <div class="card-header committee-head d-flex align-items-center" role="button">
+        <span class="caret me-2">${open?'▼':'▶'}</span>
+        <span class="fw-semibold">${esc(c.name)}</span>
+        ${time?`<span class="text-muted small ms-2">${time}</span>`:''}
+        ${c.room?`<span class="text-muted small ms-2">📍 ${esc(c.room)}</span>`:''}
+        ${badge}
+        <span class="badge text-bg-light text-dark ms-auto">${countLabel(c)}</span>
+      </div>
+      <div class="committee-body card-body p-0" ${open?'':'hidden'}>
+        <div class="p-2 text-muted small">Loading agenda…</div>
+      </div>
+    </div>`;
+  }
+
+  function renderCommittees(data) {
+    if (data.error) return `<div class="alert alert-warning mb-0">${esc(data.error)}</div>`;
+    if (!data.committees.length)
+      return `<div class="text-muted py-4 text-center">No committee meetings scheduled.</div>`;
+
+    if (!data.grouped) {
+      return data.committees.map(committeeCard).join('');
+    }
+    // grouped by status with section dividers
+    let html = '';
+    let lastSection = null;
+    for (const c of data.committees) {
+      if (c.status !== lastSection) {
+        lastSection = c.status;
+        if (SECTION[c.status]) html += `<div class="section-divider">${SECTION[c.status]}</div>`;
+      }
+      html += committeeCard(c);
+    }
+    return html;
+  }
+
+  // ── committee expand/collapse + lazy agenda load ────────────────────
+  async function loadAgenda(card) {
+    const body = card.querySelector('.committee-body');
+    if (card.dataset.loaded) return;
+    try {
+      const r = await fetch(`/api/committee/${encodeURIComponent(card.dataset.code)}?session=${state.session}&date=${state.date}`);
+      const data = await r.json();
+      if (data.error) {
+        body.innerHTML = `<div class="alert alert-warning m-2 mb-2">${esc(data.error)}</div>`;
+      } else {
+        const parts = [];
+        if (data.bills && data.bills.length) parts.push(billTable(data.bills));
+        if (data.topics && data.topics.length) parts.push(topicsList(data.topics));
+        body.innerHTML = parts.length ? parts.join('') : `<div class="p-3 text-muted small">Nothing on the agenda.</div>`;
+      }
+      card.dataset.loaded = '1';
+    } catch (e) {
+      body.innerHTML = `<div class="alert alert-warning m-2">Could not load agenda.</div>`;
+    }
+  }
+
+  tabBody.addEventListener('click', e => {
+    const head = e.target.closest('.committee-head');
+    if (!head) return;
+    const card = head.closest('.committee');
+    const body = card.querySelector('.committee-body');
+    const caret = card.querySelector('.caret');
+    const opening = body.hasAttribute('hidden');
+    if (opening) { body.removeAttribute('hidden'); caret.textContent = '▼'; card.classList.add('open'); loadAgenda(card); }
+    else { body.setAttribute('hidden',''); caret.textContent = '▶'; card.classList.remove('open'); }
+  });
+
+  // auto-load agendas for committees expanded by default (active ones)
+  function autoLoadOpen() {
+    tabBody.querySelectorAll('.committee.open').forEach(loadAgenda);
+  }
+
+  // ── tab loading ─────────────────────────────────────────────────────
+  async function loadTab(tab, force=false) {
+    const key = cacheKey(tab);
+    renderBanner();
+    if (!force && state.cache[key]) { paint(tab, state.cache[key]); return; }
+
+    tabBody.innerHTML = `<div class="d-flex align-items-center gap-2 text-muted py-4 justify-content-center">
+      <div class="spinner-border spinner-border-sm"></div> Loading…</div>`;
+    try {
+      const r = await fetch(`${tabMeta[tab]}?session=${state.session}&date=${state.date}`);
+      const data = await r.json();
+      if (data.session) state.resolved = {session: data.session, name: data.session_name};
+      state.cache[key] = data;
+      state.lastFetch[key] = Date.now();
+      paint(tab, data);
+    } catch (e) {
+      tabBody.innerHTML = `<div class="alert alert-warning mb-0">Data unavailable — try refreshing.</div>`;
+    }
+    renderBanner();
+  }
+
+  function paint(tab, data) {
+    if (state.activeTab !== tab) return;
+    if (tab.startsWith('floor')) tabBody.innerHTML = renderFloor(data);
+    else { tabBody.innerHTML = renderCommittees(data); autoLoadOpen(); }
+  }
+
+  // ── events ──────────────────────────────────────────────────────────
+  tabs.forEach(t => t.addEventListener('click', () => {
+    tabs.forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    state.activeTab = t.dataset.tab;
+    loadTab(state.activeTab);
+  }));
+
+  function resetAndReload() {
+    state.cache = {};
+    state.session = document.getElementById('session').value;
+    state.date = document.getElementById('date').value;
+    loadTab(state.activeTab, true);
+  }
+
+  document.getElementById('session').addEventListener('change', resetAndReload);
+  document.getElementById('date').addEventListener('change', resetAndReload);
+  document.getElementById('todayBtn').addEventListener('click', () => {
+    document.getElementById('date').value = state.today;
+    resetAndReload();
+  });
+
+  // auto-refresh committee tabs every 5 minutes when viewing today
+  setInterval(() => {
+    if (isToday() && state.activeTab.startsWith('comm')) loadTab(state.activeTab, true);
+    else renderBanner();
+  }, 5 * 60 * 1000);
+
+  // initial load
+  loadTab(state.activeTab);
+  </script>
+</body>
+</html>

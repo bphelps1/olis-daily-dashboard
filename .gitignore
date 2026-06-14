@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Local Claude Code config (machine-specific)
+.claude/settings.local.json
+
+# Data / spreadsheets (not part of the dashboard)
+*.xlsx
+*.xls
+*.csv

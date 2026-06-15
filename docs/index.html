@@ -35,6 +35,7 @@
       <li class="nav-item"><button class="nav-link"        data-tab="floor-senate">Senate Floor</button></li>
       <li class="nav-item"><button class="nav-link"        data-tab="comm-house">House Committees</button></li>
       <li class="nav-item"><button class="nav-link"        data-tab="comm-senate">Senate Committees</button></li>
+      <li class="nav-item"><button class="nav-link"        data-tab="comm-joint">Joint Committees</button></li>
     </ul>
 
     <div class="tab-body border border-top-0 rounded-bottom p-3" id="tabBody">
@@ -224,6 +225,7 @@
     if (tab === 'floor-senate') return floorData('senate', session, date);
     if (tab === 'comm-house')   return committeesData('house', session, date, isToday);
     if (tab === 'comm-senate')  return committeesData('senate', session, date, isToday);
+    if (tab === 'comm-joint')   return committeesData('joint', session, date, isToday);
   }
 
   async function loadTab(tab, force=false) {

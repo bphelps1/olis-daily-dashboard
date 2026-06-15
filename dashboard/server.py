@@ -207,7 +207,7 @@ def floor(chamber):
 @app.route("/api/committees/<chamber>")
 def committees(chamber):
     session_key, date_str, is_today = get_params()
-    if chamber not in ("house", "senate"):
+    if chamber not in ("house", "senate", "joint"):
         return jsonify({"error": "Unknown chamber"}), 404
     try:
         meetings = api.get_committee_meetings(session_key, chamber, date_str)

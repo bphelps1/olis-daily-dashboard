@@ -267,8 +267,9 @@ async function committeeMeetings(session, chamber, date) {
     });
   });
   const want = (chamber || "").toLowerCase();
+  // chamber is one of house | senate | joint — each has its own tab
   // clone so callers can annotate without mutating the cached objects
-  return all.filter(m => m.chamber === want || m.chamber === "joint").map(m => ({ ...m }));
+  return all.filter(m => m.chamber === want).map(m => ({ ...m }));
 }
 function committeeAgenda(session, code, date) {
   return cached(`agd:${session}:${code}:${date}`, () => fetchAll("CommitteeAgendaItems",

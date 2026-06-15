@@ -307,7 +307,7 @@ def get_committee_meetings(session_key: str, chamber: str, date_str: str) -> lis
     """
     Committee meetings for the chamber on the date. Returns list of dicts:
         {code, name, chamber, start_time, room, meeting_status}
-    Joint committees are included in both chambers' lists.
+    chamber is 'house' | 'senate' | 'joint'; each gets its own tab.
     """
     committees = get_committees_map(session_key)
 
@@ -331,7 +331,7 @@ def get_committee_meetings(session_key: str, chamber: str, date_str: str) -> lis
 
     all_meetings = cached_fetch(f"cmeetings:{session_key}:{date_str}", fetch)
     want = (chamber or "").lower()
-    return [m for m in all_meetings if m["chamber"] == want or m["chamber"] == "joint"]
+    return [m for m in all_meetings if m["chamber"] == want]
 
 
 def get_committee_agenda(session_key: str, committee_code: str, date_str: str) -> list[dict]:

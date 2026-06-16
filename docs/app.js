@@ -99,12 +99,37 @@ function addMinutes(t, mins) {
 function cleanAction(t) {
   return t ? t.replace(/\s+Of (House|Senate).*$/i, "").trim() : "";
 }
-function cleanComments(t) {
-  if (!t) return "";
-  t = t.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&")
-       .replace(/[\t\r\n]+/g, " · ");
-  t = t.replace(/(\s*·\s*)+/g, " · ").replace(/^[\s·]+|[\s·]+$/g, "");
-  return t.replace(/\s{2,}/g, " ").trim();
+// Standing footer items repeated on every meeting (language access / livestream
+// links) — not real agenda content, so they're filtered out.
+const BOILERPLATE_RE = /language-access|Legislative-Video|livestream|ListenWiFi/i;
+function stripTags(s) {
+  return (s || "").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ").trim();
+}
+function parsePresenterLines(body) {
+  // OLIS indentation convention: 1 leading tab = a presenter, 2+ tabs = a wrapped
+  // continuation of the previous presenter, no tab = a plain line (note / numbered item).
+  body = (body || "").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&");
+  const presenters = [], lines = [];
+  for (const rawLine of body.split("\n")) {
+    if (!rawLine.trim()) continue;
+    const lead = rawLine.match(/^\t*/)[0].length;
+    const text = rawLine.replace(/\s+/g, " ").trim();
+    if (lead === 0) lines.push(text);
+    else if (lead === 1) presenters.push(text);
+    else if (presenters.length) presenters[presenters.length - 1] += " " + text;
+    else presenters.push(text);
+  }
+  return { presenters, lines };
+}
+function parseAgendaComments(text, kind) {
+  if (!text || BOILERPLATE_RE.test(text)) return null;
+  let title = null, body = text;
+  const m = text.match(/<b>([\s\S]*?)<\/b>/i);
+  if (m) { title = stripTags(m[1]); body = text.slice(m.index + m[0].length); }
+  const { presenters, lines } = parsePresenterLines(body);
+  if (!title && !presenters.length && !lines.length) return null;
+  return { kind: (kind || "").trim(), title, presenters, lines };
 }
 const originatingChamber = p => ((p || "").toUpperCase().startsWith("H") ? "H" : "S");
 function wantsTestimony(p, action, ch) {
@@ -389,9 +414,8 @@ async function committeeDetail(code, session, date) {
   const topics = [];
   for (const a of agenda) {
     if (a.MeasurePrefix) continue;
-    const text = cleanComments(a.Comments);
-    const kind = (a.MeetingType || a.Action || "").trim();
-    if (text || kind) topics.push({ kind, text });
+    const parsed = parseAgendaComments(a.Comments, a.MeetingType || a.Action);
+    if (parsed) topics.push(parsed);
   }
   const name = ((await committeesMap(session))[code] || {}).name || code;
   return { code, name, bills, topics };

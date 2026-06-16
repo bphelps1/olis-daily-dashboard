@@ -90,3 +90,15 @@ table.table td:nth-child(5) {
   display: inline-block;
   margin-bottom: 2px;
 }
+
+/* ── informational agenda topics ──────────────────────────── */
+.agenda-topics .topic-title {
+  font-weight: 600;
+}
+.agenda-topics .presenter-list {
+  padding-left: 1.15rem;
+  margin-top: 0.15rem;
+}
+.agenda-topics .presenter-list li {
+  line-height: 1.35;
+}

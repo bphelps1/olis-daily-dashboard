@@ -146,10 +146,20 @@
 
   function topicsList(topics) {
     if (!topics || !topics.length) return '';
-    const rows = topics.map(t => `<li class="list-group-item py-2">
-      ${t.kind?`<span class="badge text-bg-light text-dark me-2">${esc(t.kind)}</span>`:''}
-      ${esc(t.text)}</li>`).join('');
-    return `<ul class="list-group list-group-flush">${rows}</ul>`;
+    const rows = topics.map(t => {
+      let inner = '';
+      if (t.title) inner += `<div class="topic-title">${esc(t.title)}</div>`;
+      if (t.presenters && t.presenters.length)
+        inner += `<ul class="presenter-list small text-muted mb-0">${t.presenters.map(p=>`<li>${esc(p)}</li>`).join('')}</ul>`;
+      if (t.lines && t.lines.length) {
+        const cls = t.title ? 'small text-muted' : '';
+        inner += t.lines.map(l=>`<div class="${cls}">${esc(l)}</div>`).join('');
+      }
+      const kindBadge = (t.kind && t.kind !== 'Informational Meeting')
+        ? `<span class="badge text-bg-light text-dark me-2">${esc(t.kind)}</span>` : '';
+      return `<li class="list-group-item py-2">${kindBadge}${inner}</li>`;
+    }).join('');
+    return `<ul class="list-group list-group-flush agenda-topics">${rows}</ul>`;
   }
 
   function committeeCard(c) {

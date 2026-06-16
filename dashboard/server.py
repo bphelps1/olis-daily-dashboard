@@ -56,15 +56,64 @@ def clean_action(text: str | None) -> str:
     return re.sub(r"\s+Of (House|Senate).*$", "", text, flags=re.IGNORECASE).strip()
 
 
-def clean_comments(text: str | None) -> str:
-    """Strip the HTML / tab markup OLIS puts in agenda-item Comments."""
-    if not text:
-        return ""
-    text = re.sub(r"<[^>]+>", " ", text)                 # drop HTML tags
-    text = text.replace("&nbsp;", " ").replace("&amp;", "&")
-    text = re.sub(r"[\t\r\n]+", " · ", text)             # tabs/newlines -> separator
-    text = re.sub(r"(\s*·\s*)+", " · ", text).strip(" ·")
-    return re.sub(r"\s{2,}", " ", text).strip()
+# Standing footer items repeated on every meeting (language access / livestream
+# links) — not real agenda content, so they're filtered out.
+_BOILERPLATE_RE = re.compile(r"language-access|Legislative-Video|livestream|ListenWiFi", re.I)
+
+
+def _strip_tags(s: str | None) -> str:
+    s = re.sub(r"<[^>]+>", "", s or "")
+    s = s.replace("&nbsp;", " ").replace("&amp;", "&")
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _parse_presenter_lines(body: str) -> tuple[list[str], list[str]]:
+    """
+    Split an agenda item's body into presenters vs. other lines using the OLIS
+    indentation convention: one leading tab = a presenter, two+ tabs = a wrapped
+    continuation of the previous presenter, no tab = a plain line (note or a
+    numbered work-session item).
+    """
+    body = re.sub(r"<[^>]+>", "", body or "").replace("&nbsp;", " ").replace("&amp;", "&")
+    presenters: list[str] = []
+    lines: list[str] = []
+    for raw_line in body.split("\n"):
+        if not raw_line.strip():
+            continue
+        lead = len(raw_line) - len(raw_line.lstrip("\t"))
+        text = re.sub(r"\s+", " ", raw_line).strip()
+        if lead == 0:
+            lines.append(text)
+        elif lead == 1:
+            presenters.append(text)
+        elif presenters:
+            presenters[-1] += " " + text
+        else:
+            presenters.append(text)
+    return presenters, lines
+
+
+def parse_agenda_comments(text: str | None, kind: str | None) -> dict | None:
+    """
+    Turn an informational agenda item's Comments markup into a structured topic:
+        {kind, title, presenters: [...], lines: [...]}
+    `title` is the bold topic heading; `presenters` are the speakers beneath it;
+    `lines` holds untitled content (notes, numbered work-session items).
+    Returns None for empty items and standing footer boilerplate.
+    """
+    if not text or _BOILERPLATE_RE.search(text):
+        return None
+    title = None
+    body = text
+    m = re.search(r"<b>(.*?)</b>", text, re.IGNORECASE | re.DOTALL)
+    if m:
+        title = _strip_tags(m.group(1))
+        body = text[m.end():]
+    presenters, lines = _parse_presenter_lines(body)
+    if not title and not presenters and not lines:
+        return None
+    return {"kind": (kind or "").strip(), "title": title,
+            "presenters": presenters, "lines": lines}
 
 
 def build_bill(session_key, prefix, number, action,
@@ -271,10 +320,10 @@ def committee_detail(code):
         for a in agenda:
             if a.get("MeasurePrefix"):
                 continue
-            text = clean_comments(a.get("Comments"))
-            kind = (a.get("MeetingType") or a.get("Action") or "").strip()
-            if text or kind:
-                topics.append({"kind": kind, "text": text})
+            parsed = parse_agenda_comments(a.get("Comments"),
+                                           a.get("MeetingType") or a.get("Action"))
+            if parsed:
+                topics.append(parsed)
 
         committees_map = api.get_committees_map(session_key)
         name = committees_map.get(code, {}).get("name", code)

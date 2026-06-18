@@ -477,10 +477,11 @@ let _matchers = null;
 async function orgMatchers() {
   if (_matchers) return _matchers;
   let list = [];
-  try {
-    const data = await (await fetch("orgs.json")).json();
-    list = data.organizations || [];
-  } catch (e) { console.error("orgs.json load failed", e); }
+  // curated list first (canonical names + aliases), then the lobbyist registry
+  for (const f of ["orgs.json", "lobby_clients.json"]) {
+    try { const data = await (await fetch(f)).json(); list = list.concat(data.organizations || []); }
+    catch (e) { console.error(f + " load failed", e); }
+  }
   _matchers = list.map(o => ({
     name: o.name,
     pats: [o.name, ...(o.aliases || [])].map(a => {

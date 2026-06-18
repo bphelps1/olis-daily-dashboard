@@ -407,11 +407,14 @@ def _norm_org(s: str | None) -> str:
 def _load_org_matchers() -> list[tuple]:
     import json
     from pathlib import Path
-    try:
-        data = json.loads((Path(__file__).parent / "orgs.json").read_text())
-        orgs = data.get("organizations", [])
-    except Exception:
-        orgs = []
+    orgs = []
+    # curated list first (canonical names + aliases), then the lobbyist registry
+    for fn in ("orgs.json", "lobby_clients.json"):
+        try:
+            data = json.loads((Path(__file__).parent / fn).read_text())
+            orgs += data.get("organizations", [])
+        except Exception:
+            pass
     matchers = []
     for o in orgs:
         pats = []

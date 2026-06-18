@@ -141,12 +141,15 @@
       const posLine = (h, p) => {
         const d = h.positions[p];
         if (!d.count) return '';
-        const orgs = d.orgs.slice(0, 25).map(o => `${esc(o.name)}${o.count>1?` (${o.count})`:''}`).join(', ');
-        const more = d.orgs.length > 25 ? ' …' : '';
-        const indiv = d.individuals ? `${d.orgs.length?'; ':''}${d.individuals} individual${d.individuals===1?'':'s'}` : '';
         const cls = {Support:'text-success', Oppose:'text-danger', Neutral:'text-muted'}[p];
-        return `<div class="bd-pos"><span class="${cls} fw-semibold">${p} (${d.count}):</span>
-          <span class="small">${orgs||'—'}${more}${indiv}</span></div>`;
+        const orgs = d.orgs.slice(0, 30).map(o =>
+          `<span class="org-chip">${esc(o.name)}${o.count>1?` ${o.count}`:''}</span>`).join(' ');
+        const more = d.orgs.length > 30 ? ' …' : '';
+        const others = d.others
+          ? `<span class="text-muted others-count" title="${esc((d.otherSamples||[]).join('  ·  ') || 'no named affiliation')}">${d.orgs.length?' + ':''}${d.others} individual${d.others===1?'':'s'}/other</span>`
+          : '';
+        const body = d.orgs.length ? `${orgs}${more}${others}` : (others || '<span class="text-muted">—</span>');
+        return `<div class="bd-pos"><span class="${cls} fw-semibold">${p} (${d.count}):</span> <span class="small">${body}</span></div>`;
       };
       const hRows = t.hearings.map(h => `<div class="bd-hearing">
         <div><span class="fw-semibold">${esc(h.where)}</span>
@@ -155,7 +158,7 @@
         ${posLine(h,'Support')}${posLine(h,'Oppose')}${posLine(h,'Neutral')}
       </div>`).join('');
       parts.push(`<div class="bd-section"><div class="bd-head">Testimony</div>${summary}${hRows}
-        <div class="bd-caveat">⚠ Affiliations come from a free-text field and may include individuals' hometowns or messages — treat as best-effort.</div></div>`);
+        <div class="bd-caveat">⚠ Named organizations are matched against a curated allowlist. Cities, individuals, and campaign slogans are folded into the "individuals/other" count (hover it for a sample). Position, date, and version are exact.</div></div>`);
     } else {
       parts.push(`<div class="bd-section"><div class="bd-head">Testimony</div><div class="text-muted small">No public testimony recorded.</div></div>`);
     }

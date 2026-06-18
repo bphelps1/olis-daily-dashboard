@@ -387,13 +387,58 @@ def _tally(rows: list[dict], party: dict, field: str) -> dict:
             "rAye": r_aye, "rNay": r_nay, "nayNames": nay_names}
 
 
-def _affiliation(r: dict) -> str | None:
-    a = (r.get("BehalfOf") or "").strip()
-    if a and a.lower() not in AFFIL_STOP:
-        return a
-    o = (r.get("Organization") or "").strip()
-    if o and o.lower() not in AFFIL_STOP:
-        return o
+def _affiliation_candidates(r: dict) -> list[str]:
+    """Raw affiliation strings (both free-text fields) to test against the allowlist."""
+    out = []
+    for v in (r.get("BehalfOf"), r.get("Organization")):
+        s = (v or "").strip()
+        if s and s.lower() not in AFFIL_STOP:
+            out.append(s)
+    return out
+
+
+# ── curated organization allowlist (orgs.json, shared with the static site) ──
+
+def _norm_org(s: str | None) -> str:
+    s = re.sub(r"[.,/&'’\-]", " ", (s or "").lower())
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _load_org_matchers() -> list[tuple]:
+    import json
+    from pathlib import Path
+    try:
+        data = json.loads((Path(__file__).parent / "orgs.json").read_text())
+        orgs = data.get("organizations", [])
+    except Exception:
+        orgs = []
+    matchers = []
+    for o in orgs:
+        pats = []
+        for a in [o["name"], *o.get("aliases", [])]:
+            p = _norm_org(a)
+            if p:
+                pats.append((p, " " not in p and len(p) <= 5))  # short acronym -> whole-word
+        matchers.append((o["name"], pats))
+    return matchers
+
+
+_ORG_MATCHERS = _load_org_matchers()
+
+
+def match_org(aff: str | None) -> str | None:
+    a = (aff or "").strip()
+    if not a:
+        return None
+    n = _norm_org(a)
+    for name, pats in _ORG_MATCHERS:
+        for p, whole in pats:
+            if (f" {p} " in f" {n} ") if whole else (p in n):
+                return name
+    # generic government / public bodies (unambiguous in an affiliation field)
+    if re.match(r"^city of \S", a, re.I) or re.search(r"\b(department|bureau) of\b", a, re.I) \
+            or re.search(r"\bboard of commissioners\b", a, re.I):
+        return re.sub(r"\s+", " ", a).strip()
     return None
 
 
@@ -459,16 +504,28 @@ def bill_history(prefix, number):
             for pos in ("Support", "Oppose", "Neutral"):
                 recs = [r for r in rows if POSITIONS.get(r.get("PositionOnMeasureId")) == pos]
                 orgs: dict = {}
-                individuals = 0
+                others = 0
+                other_samples: dict = {}
                 for r in recs:
-                    a = _affiliation(r)
-                    if a:
-                        orgs[a] = orgs.get(a, 0) + 1
+                    matched = None
+                    for cand in _affiliation_candidates(r):
+                        matched = match_org(cand)
+                        if matched:
+                            break
+                    if matched:
+                        orgs[matched] = orgs.get(matched, 0) + 1
                     else:
-                        individuals += 1
-                positions[pos] = {"count": len(recs), "individuals": individuals,
-                                  "orgs": [{"name": n, "count": c} for n, c in
-                                           sorted(orgs.items(), key=lambda kv: (-kv[1], kv[0]))]}
+                        others += 1
+                        cands = _affiliation_candidates(r)
+                        if cands:
+                            other_samples[cands[0]] = other_samples.get(cands[0], 0) + 1
+                positions[pos] = {
+                    "count": len(recs), "others": others,
+                    "orgs": [{"name": n, "count": c} for n, c in
+                             sorted(orgs.items(), key=lambda kv: (-kv[1], kv[0]))],
+                    "otherSamples": [n for n, _ in
+                                     sorted(other_samples.items(), key=lambda kv: -kv[1])[:12]],
+                }
             hearings.append({"where": cname(rows[0].get("CommitteeCode")),
                              "date": date[:10], "version": _version_at(tl, date),
                              "positions": positions})

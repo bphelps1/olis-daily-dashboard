@@ -128,6 +128,17 @@ table.table td:nth-child(5) {
 }
 .bd-vote:first-of-type, .bd-hearing:first-of-type { border-top: none; }
 .bd-pos { margin-top: 0.1rem; }
+.org-chip {
+  display: inline-block;
+  background: #eef1f5;
+  border: 1px solid #dde2e8;
+  border-radius: 0.7rem;
+  padding: 0 0.45rem;
+  margin: 1px 1px;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+.others-count { cursor: help; }
 .bd-caveat {
   font-size: 0.75rem;
   color: #8a6d3b;

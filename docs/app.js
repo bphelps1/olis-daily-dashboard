@@ -459,12 +459,50 @@ function tallyVotes(rows, party, field) {
   }
   return { aye, nay, excused, dAye, dNay, rAye, rNay, nayNames };
 }
-function affiliation(r) {
-  const a = (r.BehalfOf || "").trim();
-  if (a && !AFFIL_STOP.has(a.toLowerCase())) return a;
-  const o = (r.Organization || "").trim();
-  // Organization frequently holds a city; only use it as a fallback hint
-  if (o && !AFFIL_STOP.has(o.toLowerCase())) return o;
+function affiliationCandidates(r) {
+  // raw affiliation strings to test against the org allowlist (both free-text fields)
+  const out = [];
+  for (const v of [r.BehalfOf, r.Organization]) {
+    const s = (v || "").trim();
+    if (s && !AFFIL_STOP.has(s.toLowerCase())) out.push(s);
+  }
+  return out;
+}
+
+// ── curated organization allowlist matching ──────────────────────────────────
+function normOrg(s) {
+  return (s || "").toLowerCase().replace(/[.,/&'’\-]/g, " ").replace(/\s+/g, " ").trim();
+}
+let _matchers = null;
+async function orgMatchers() {
+  if (_matchers) return _matchers;
+  let list = [];
+  try {
+    const data = await (await fetch("orgs.json")).json();
+    list = data.organizations || [];
+  } catch (e) { console.error("orgs.json load failed", e); }
+  _matchers = list.map(o => ({
+    name: o.name,
+    pats: [o.name, ...(o.aliases || [])].map(a => {
+      const p = normOrg(a);
+      return { p, whole: !p.includes(" ") && p.length <= 5 };  // short acronyms: whole-word only
+    }).filter(x => x.p),
+  }));
+  return _matchers;
+}
+function matchOrg(aff, matchers) {
+  const a = (aff || "").trim();
+  if (!a) return null;
+  const n = normOrg(a);
+  for (const o of matchers) {
+    for (const { p, whole } of o.pats) {
+      if (whole ? (" " + n + " ").includes(" " + p + " ") : n.includes(p)) return o.name;
+    }
+  }
+  // generic government/public bodies (unambiguous in an affiliation field)
+  if (/^city of \S/i.test(a)) return a.replace(/\s+/g, " ").trim();
+  if (/\b(department|bureau) of\b/i.test(a)) return a.replace(/\s+/g, " ").trim();
+  if (/\bboard of commissioners\b/i.test(a)) return a.replace(/\s+/g, " ").trim();
   return null;
 }
 const MAIN_VERSION = /^(Introduced|[A-Z]-Engrossed|Enrolled)$/;
@@ -472,8 +510,8 @@ const MAIN_VERSION = /^(Introduced|[A-Z]-Engrossed|Enrolled)$/;
 async function billHistory(session, prefix, number) {
   return cached(`hist:${session}:${prefix}:${number}`, async () => {
     const f = `SessionKey eq '${session}' and MeasurePrefix eq '${prefix}' and MeasureNumber eq ${number}`;
-    const [party, committees, hist, mv, cv, test, docs] = await Promise.all([
-      legislatorParty(session), committeesMap(session),
+    const [party, committees, matchers, hist, mv, cv, test, docs] = await Promise.all([
+      legislatorParty(session), committeesMap(session), orgMatchers(),
       fetchAll("MeasureHistoryActions", f, "ActionDate"),
       fetchAll("MeasureVotes", f),
       fetchAll("CommitteeVotes", f),
@@ -516,12 +554,23 @@ async function billHistory(session, prefix, number) {
       const positions = {};
       for (const pos of ["Support", "Oppose", "Neutral"]) {
         const recs = rows.filter(r => POSITIONS[r.PositionOnMeasureId] === pos);
-        const orgs = {}; let individuals = 0;
-        for (const r of recs) { const a = affiliation(r); if (a) orgs[a] = (orgs[a] || 0) + 1; else individuals++; }
+        const orgs = {}; let others = 0; const otherSamples = {};
+        for (const r of recs) {
+          let matched = null;
+          for (const cand of affiliationCandidates(r)) { matched = matchOrg(cand, matchers); if (matched) break; }
+          if (matched) { orgs[matched] = (orgs[matched] || 0) + 1; }
+          else {
+            others++;
+            const cands = affiliationCandidates(r);  // un-matched but non-empty -> sample for tooltip
+            if (cands.length) otherSamples[cands[0]] = (otherSamples[cands[0]] || 0) + 1;
+          }
+        }
         positions[pos] = {
-          count: recs.length, individuals,
+          count: recs.length, others,
           orgs: Object.entries(orgs).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
             .map(([name, count]) => ({ name, count })),
+          otherSamples: Object.entries(otherSamples).sort((a, b) => b[1] - a[1])
+            .slice(0, 12).map(([name]) => name),
         };
       }
       hearings.push({ where: cname(rows[0].CommitteeCode), date: date.slice(0, 10),

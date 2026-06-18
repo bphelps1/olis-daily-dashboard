@@ -332,6 +332,165 @@ def committee_detail(code):
         return jsonify({"error": f"Data unavailable — {e}"}), 502
 
 
+# ── per-bill history: votes (by version) + testimony (by hearing/version) ─────
+
+POSITIONS = {3983: "Support", 3981: "Neutral", 3982: "Oppose"}
+# free-text affiliation values that are clearly not organizations
+AFFIL_STOP = {"", "self", "myself", "my self", "me", "individual", "private citizen",
+              "citizen", "concerned citizen", "constituent", "none", "n/a", "na",
+              "anonymous", "resident", "voter", "parent", "teacher", "student"}
+MAIN_VERSION_RE = re.compile(r"^(Introduced|[A-Z]-Engrossed|Enrolled)$")
+
+
+def _version_timeline(history: list[dict]) -> list[dict]:
+    events = [{"date": "", "version": "Introduced"}]
+    for h in history:
+        m = re.search(r"printed\s+([A-Z])-Engrossed", h.get("ActionText") or "", re.I)
+        if m:
+            events.append({"date": h.get("ActionDate") or "",
+                           "version": f"{m.group(1).upper()}-Engrossed"})
+    events.sort(key=lambda e: e["date"])
+    return events
+
+
+def _version_at(timeline: list[dict], date: str) -> str:
+    v = "Introduced"
+    for e in timeline:
+        if e["date"] and e["date"] <= date:
+            v = e["version"]
+    return v
+
+
+def _vote_result(text: str | None) -> str:
+    m = re.search(r"\b(Passed|Failed|Adopted|Lost|Postponed|Withdrawn)\b", text or "", re.I)
+    return m.group(1).capitalize() if m else ""
+
+
+def _tally(rows: list[dict], party: dict, field: str) -> dict:
+    aye = nay = excused = d_aye = d_nay = r_aye = r_nay = 0
+    nay_names = []
+    for r in rows:
+        v = api.normalise_vote(r.get(field))
+        p = party.get(r.get("VoteName"), "I")
+        if v == "Yea":
+            aye += 1
+            if p == "D": d_aye += 1
+            elif p == "R": r_aye += 1
+        elif v == "Nay":
+            nay += 1
+            nay_names.append(r.get("VoteName"))
+            if p == "D": d_nay += 1
+            elif p == "R": r_nay += 1
+        else:
+            excused += 1
+    return {"aye": aye, "nay": nay, "excused": excused, "dAye": d_aye, "dNay": d_nay,
+            "rAye": r_aye, "rNay": r_nay, "nayNames": nay_names}
+
+
+def _affiliation(r: dict) -> str | None:
+    a = (r.get("BehalfOf") or "").strip()
+    if a and a.lower() not in AFFIL_STOP:
+        return a
+    o = (r.get("Organization") or "").strip()
+    if o and o.lower() not in AFFIL_STOP:
+        return o
+    return None
+
+
+def _version_rank(name: str) -> int:
+    order = ["Introduced", "A-Engrossed", "B-Engrossed", "C-Engrossed", "D-Engrossed", "Enrolled"]
+    return order.index(name) if name in order else 50
+
+
+@app.route("/api/bill/<prefix>/<int:number>")
+def bill_history(prefix, number):
+    session_key, date_str, _ = get_params()
+    try:
+        f = (f"SessionKey eq '{session_key}' and MeasurePrefix eq '{prefix}' "
+             f"and MeasureNumber eq {number}")
+        party = api.get_legislator_party_map(session_key)
+        committees = api.get_committees_map(session_key)
+        history = api.fetch_all("MeasureHistoryActions", f, orderby="ActionDate")
+        mv = api.fetch_all("MeasureVotes", f)
+        cv = api.fetch_all("CommitteeVotes", f)
+        test = api.fetch_all("CommitteePublicTestimonies", f)
+        docs = api.fetch_all("MeasureDocuments", f)
+        tl = _version_timeline(history)
+
+        def cname(code):
+            return committees.get(code, {}).get("name", code)
+
+        votes = []
+        floor_g: dict = {}
+        for r in mv:
+            floor_g.setdefault(f"{r.get('Chamber')}|{r.get('MeasureHistoryId') or r.get('ActionDate')}", []).append(r)
+        for rows in floor_g.values():
+            date = rows[0].get("ActionDate") or ""
+            votes.append({"kind": "floor",
+                          "where": f"{api.CHAMBER_NAME.get(rows[0].get('Chamber'), rows[0].get('Chamber'))} Floor",
+                          "date": date[:10], "version": _version_at(tl, date),
+                          "result": _vote_result(rows[0].get("ActionText")),
+                          "action": (rows[0].get("ActionText") or "").split(".")[0].strip(),
+                          **_tally(rows, party, "Vote")})
+        comm_g: dict = {}
+        for r in cv:
+            comm_g.setdefault(f"{r.get('CommitteeCode')}|{r.get('MeetingDate') or ''}", []).append(r)
+        for rows in comm_g.values():
+            date = rows[0].get("MeetingDate") or ""
+            t = _tally(rows, party, "Meaning")
+            votes.append({"kind": "committee", "where": cname(rows[0].get("CommitteeCode")),
+                          "date": date[:10], "version": _version_at(tl, date),
+                          "result": "Do pass" if t["aye"] > t["nay"] else "Not passed",
+                          "action": "Work session", **t})
+        votes.sort(key=lambda v: v["date"])
+
+        h_g: dict = {}
+        for r in test:
+            h_g.setdefault(f"{r.get('CommitteeCode')}|{(r.get('MeetingDate') or '')[:10]}", []).append(r)
+        total_by_pos = {"Support": 0, "Oppose": 0, "Neutral": 0}
+        for r in test:
+            p = POSITIONS.get(r.get("PositionOnMeasureId"))
+            if p in total_by_pos:
+                total_by_pos[p] += 1
+        hearings = []
+        for rows in h_g.values():
+            date = rows[0].get("MeetingDate") or ""
+            positions = {}
+            for pos in ("Support", "Oppose", "Neutral"):
+                recs = [r for r in rows if POSITIONS.get(r.get("PositionOnMeasureId")) == pos]
+                orgs: dict = {}
+                individuals = 0
+                for r in recs:
+                    a = _affiliation(r)
+                    if a:
+                        orgs[a] = orgs.get(a, 0) + 1
+                    else:
+                        individuals += 1
+                positions[pos] = {"count": len(recs), "individuals": individuals,
+                                  "orgs": [{"name": n, "count": c} for n, c in
+                                           sorted(orgs.items(), key=lambda kv: (-kv[1], kv[0]))]}
+            hearings.append({"where": cname(rows[0].get("CommitteeCode")),
+                             "date": date[:10], "version": _version_at(tl, date),
+                             "positions": positions})
+        hearings.sort(key=lambda h: h["date"])
+
+        versions = []
+        seen = set()
+        for d in docs:
+            n = d.get("VersionDescription") or ""
+            if MAIN_VERSION_RE.match(n) and n not in seen:
+                seen.add(n)
+                versions.append({"name": n, "url": d.get("DocumentUrl")})
+        versions.sort(key=lambda v: _version_rank(v["name"]))
+
+        return jsonify({"votes": votes,
+                        "testimony": {"total": len(test), "byPosition": total_by_pos,
+                                      "hearings": hearings},
+                        "versions": versions})
+    except requests.RequestException as e:
+        return jsonify({"error": f"Data unavailable — {e}"}), 502
+
+
 def main():
     import os
     # Default to 5001 — macOS reserves 5000 for the AirPlay Receiver.

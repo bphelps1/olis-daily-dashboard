@@ -102,3 +102,34 @@ table.table td:nth-child(5) {
 .agenda-topics .presenter-list li {
   line-height: 1.35;
 }
+
+/* ── expandable bill detail (votes + testimony) ───────────── */
+.bill-row { cursor: pointer; }
+.bill-row .bd-caret { color: #888; font-size: 0.8em; }
+.bill-row.open { background: #eef3fb; }
+.bill-detail-row > td { background: #f8f9fb; padding: 0; }
+.bill-detail { padding: 0.5rem 0.75rem 0.75rem 1.6rem; }
+.bd-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 0.5rem 1.5rem;
+}
+.bd-head {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #6c757d;
+  margin-bottom: 0.35rem;
+}
+.bd-vote, .bd-hearing {
+  padding: 0.3rem 0;
+  border-top: 1px solid #e9ecef;
+}
+.bd-vote:first-of-type, .bd-hearing:first-of-type { border-top: none; }
+.bd-pos { margin-top: 0.1rem; }
+.bd-caveat {
+  font-size: 0.75rem;
+  color: #8a6d3b;
+  margin-top: 0.4rem;
+}

@@ -88,14 +88,109 @@
   }
 
   function billRow(b) {
-    return `<tr>
-      <td class="text-nowrap"><a href="${b.url}" target="_blank" rel="noopener">${esc(b.bill)}</a></td>
+    return `<tr class="bill-row" data-prefix="${esc(b.prefix)}" data-number="${b.number}">
+      <td class="text-nowrap"><span class="bd-caret">▶</span> <a href="${b.url}" target="_blank" rel="noopener">${esc(b.bill)}</a></td>
       <td>${esc(b.catchline)}</td>
       <td class="text-nowrap">${esc(b.action)}</td>
       <td class="text-nowrap">${esc(b.sponsor)}</td>
       <td>${flagBadges(b.flags)}</td>
     </tr>`;
   }
+
+  function fmtDate2(iso) {
+    if (!iso) return '';
+    const [y,m,d] = iso.split('-').map(Number);
+    return new Date(y, m-1, d).toLocaleDateString(undefined, {month:'short', day:'numeric', year:'numeric'});
+  }
+
+  const PASS_RESULTS = new Set(['Passed','Adopted','Do pass']);
+
+  function renderBillDetail(data) {
+    const parts = [];
+
+    // votes
+    if (data.votes.length) {
+      const rows = data.votes.map(v => {
+        const res = v.result
+          ? `<span class="badge ${PASS_RESULTS.has(v.result)?'text-bg-success':'text-bg-secondary'}">${esc(v.result)}</span>` : '';
+        const nays = v.nayNames.length
+          ? `<div class="small text-muted">No: ${v.nayNames.map(esc).join(', ')}</div>` : '';
+        return `<div class="bd-vote">
+          <div><span class="fw-semibold">${esc(v.where)}</span>
+            <span class="text-muted small ms-1">${fmtDate2(v.date)}</span>
+            <span class="badge text-bg-light text-dark ms-1">${esc(v.version)}</span> ${res}</div>
+          <div class="small">Aye ${v.aye} · Nay ${v.nay}${v.excused?` · Excused ${v.excused}`:''}
+            <span class="text-muted">(D ${v.dAye}-${v.dNay} · R ${v.rAye}-${v.rNay})</span></div>
+          ${nays}
+        </div>`;
+      }).join('');
+      parts.push(`<div class="bd-section"><div class="bd-head">Votes</div>${rows}</div>`);
+    } else {
+      parts.push(`<div class="bd-section"><div class="bd-head">Votes</div><div class="text-muted small">No recorded votes yet.</div></div>`);
+    }
+
+    // testimony
+    const t = data.testimony;
+    if (t.total) {
+      const summary = `<div class="small text-muted mb-2">${t.total} submissions —
+        <span class="text-success">${t.byPosition.Support} support</span> ·
+        <span class="text-danger">${t.byPosition.Oppose} oppose</span> ·
+        ${t.byPosition.Neutral} neutral</div>`;
+      const posLine = (h, p) => {
+        const d = h.positions[p];
+        if (!d.count) return '';
+        const orgs = d.orgs.slice(0, 25).map(o => `${esc(o.name)}${o.count>1?` (${o.count})`:''}`).join(', ');
+        const more = d.orgs.length > 25 ? ' …' : '';
+        const indiv = d.individuals ? `${d.orgs.length?'; ':''}${d.individuals} individual${d.individuals===1?'':'s'}` : '';
+        const cls = {Support:'text-success', Oppose:'text-danger', Neutral:'text-muted'}[p];
+        return `<div class="bd-pos"><span class="${cls} fw-semibold">${p} (${d.count}):</span>
+          <span class="small">${orgs||'—'}${more}${indiv}</span></div>`;
+      };
+      const hRows = t.hearings.map(h => `<div class="bd-hearing">
+        <div><span class="fw-semibold">${esc(h.where)}</span>
+          <span class="text-muted small ms-1">${fmtDate2(h.date)}</span>
+          <span class="badge text-bg-light text-dark ms-1">${esc(h.version)}</span></div>
+        ${posLine(h,'Support')}${posLine(h,'Oppose')}${posLine(h,'Neutral')}
+      </div>`).join('');
+      parts.push(`<div class="bd-section"><div class="bd-head">Testimony</div>${summary}${hRows}
+        <div class="bd-caveat">⚠ Affiliations come from a free-text field and may include individuals' hometowns or messages — treat as best-effort.</div></div>`);
+    } else {
+      parts.push(`<div class="bd-section"><div class="bd-head">Testimony</div><div class="text-muted small">No public testimony recorded.</div></div>`);
+    }
+
+    if (data.versions.length) {
+      const links = data.versions.map(v => `<a href="${v.url}" target="_blank" rel="noopener">${esc(v.name)}</a>`).join(' · ');
+      parts.push(`<div class="bd-section"><div class="bd-head">Versions</div><div class="small">${links}</div></div>`);
+    }
+    return `<div class="bd-grid">${parts.join('')}</div>`;
+  }
+
+  // expand/collapse a bill row to show its vote + testimony history
+  tabBody.addEventListener('click', async e => {
+    if (e.target.closest('a')) return;            // let bill links work
+    const row = e.target.closest('.bill-row');
+    if (!row) return;
+    const caret = row.querySelector('.bd-caret');
+    const next = row.nextElementSibling;
+    if (next && next.classList.contains('bill-detail-row')) {
+      next.remove(); caret.textContent = '▶'; row.classList.remove('open');
+      return;
+    }
+    caret.textContent = '▼'; row.classList.add('open');
+    const detail = document.createElement('tr');
+    detail.className = 'bill-detail-row';
+    detail.innerHTML = `<td colspan="5"><div class="bill-detail">
+      <div class="text-muted small p-2"><span class="spinner-border spinner-border-sm"></span> Loading vote &amp; testimony history…</div></div></td>`;
+    row.after(detail);
+    try {
+      const session = state.session === 'auto' ? await resolveSessionForDate(state.date) : state.session;
+      const data = await billHistory(session, row.dataset.prefix, Number(row.dataset.number));
+      detail.querySelector('.bill-detail').innerHTML = renderBillDetail(data);
+    } catch (err) {
+      console.error(err);
+      detail.querySelector('.bill-detail').innerHTML = `<div class="alert alert-warning m-2">Could not load bill history.</div>`;
+    }
+  });
 
   function billTable(bills) {
     if (!bills.length) return '';

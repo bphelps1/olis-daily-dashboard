@@ -421,6 +421,130 @@ async function committeeDetail(code, session, date) {
   return { code, name, bills, topics };
 }
 
+// ── per-bill history: votes (by version) + testimony (by hearing/version) ─────
+const POSITIONS = { 3983: "Support", 3981: "Neutral", 3982: "Oppose" };
+// free-text affiliation values that are clearly not organizations
+const AFFIL_STOP = new Set(["", "self", "myself", "my self", "me", "individual",
+  "private citizen", "citizen", "concerned citizen", "constituent", "none", "n/a",
+  "na", "anonymous", "resident", "voter", "parent", "teacher", "student"]);
+
+function versionTimeline(historyRows) {
+  // engrossment events -> when each printed version took effect (Introduced implicit)
+  const events = [{ date: "", version: "Introduced" }];
+  for (const h of historyRows) {
+    const m = (h.ActionText || "").match(/printed\s+([A-Z])-Engrossed/i);
+    if (m) events.push({ date: h.ActionDate || "", version: `${m[1].toUpperCase()}-Engrossed` });
+  }
+  events.sort((a, b) => a.date.localeCompare(b.date));
+  return events;
+}
+function versionAt(timeline, date) {
+  let v = "Introduced";
+  for (const e of timeline) if (e.date && e.date <= date) v = e.version;
+  return v;
+}
+function voteResult(actionText) {
+  const m = (actionText || "").match(/\b(Passed|Failed|Adopted|Lost|Postponed|Withdrawn)\b/i);
+  return m ? m[1][0].toUpperCase() + m[1].slice(1).toLowerCase() : "";
+}
+function tallyVotes(rows, party, field) {
+  let aye = 0, nay = 0, excused = 0, dAye = 0, dNay = 0, rAye = 0, rNay = 0;
+  const nayNames = [];
+  for (const r of rows) {
+    const v = normVote(r[field]);
+    const p = party[r.VoteName] || "I";
+    if (v === "Yea") { aye++; if (p === "D") dAye++; else if (p === "R") rAye++; }
+    else if (v === "Nay") { nay++; nayNames.push(r.VoteName); if (p === "D") dNay++; else if (p === "R") rNay++; }
+    else excused++;
+  }
+  return { aye, nay, excused, dAye, dNay, rAye, rNay, nayNames };
+}
+function affiliation(r) {
+  const a = (r.BehalfOf || "").trim();
+  if (a && !AFFIL_STOP.has(a.toLowerCase())) return a;
+  const o = (r.Organization || "").trim();
+  // Organization frequently holds a city; only use it as a fallback hint
+  if (o && !AFFIL_STOP.has(o.toLowerCase())) return o;
+  return null;
+}
+const MAIN_VERSION = /^(Introduced|[A-Z]-Engrossed|Enrolled)$/;
+
+async function billHistory(session, prefix, number) {
+  return cached(`hist:${session}:${prefix}:${number}`, async () => {
+    const f = `SessionKey eq '${session}' and MeasurePrefix eq '${prefix}' and MeasureNumber eq ${number}`;
+    const [party, committees, hist, mv, cv, test, docs] = await Promise.all([
+      legislatorParty(session), committeesMap(session),
+      fetchAll("MeasureHistoryActions", f, "ActionDate"),
+      fetchAll("MeasureVotes", f),
+      fetchAll("CommitteeVotes", f),
+      fetchAll("CommitteePublicTestimonies", f),
+      fetchAll("MeasureDocuments", f),
+    ]);
+    const tl = versionTimeline(hist);
+    const cname = code => (committees[code] || {}).name || code;
+
+    // votes
+    const votes = [];
+    const floorG = {};
+    for (const r of mv) (floorG[`${r.Chamber}|${r.MeasureHistoryId || r.ActionDate}`] ||= []).push(r);
+    for (const k in floorG) {
+      const rows = floorG[k], date = (rows[0].ActionDate || "");
+      votes.push({ kind: "floor", where: `${CHAMBER[rows[0].Chamber] || rows[0].Chamber} Floor`,
+        date: date.slice(0, 10), version: versionAt(tl, date),
+        result: voteResult(rows[0].ActionText), action: (rows[0].ActionText || "").split(".")[0].trim(),
+        ...tallyVotes(rows, party, "Vote") });
+    }
+    const commG = {};
+    for (const r of cv) (commG[`${r.CommitteeCode}|${r.MeetingDate || ""}`] ||= []).push(r);
+    for (const k in commG) {
+      const rows = commG[k], date = (rows[0].MeetingDate || "");
+      const t = tallyVotes(rows, party, "Meaning");
+      votes.push({ kind: "committee", where: cname(rows[0].CommitteeCode),
+        date: date.slice(0, 10), version: versionAt(tl, date),
+        result: t.aye > t.nay ? "Do pass" : "Not passed", action: "Work session", ...t });
+    }
+    votes.sort((a, b) => a.date.localeCompare(b.date));
+
+    // testimony grouped by hearing (committee + date)
+    const hG = {};
+    for (const r of test) (hG[`${r.CommitteeCode}|${(r.MeetingDate || "").slice(0, 10)}`] ||= []).push(r);
+    const hearings = [];
+    const totalByPos = { Support: 0, Oppose: 0, Neutral: 0 };
+    for (const r of test) { const p = POSITIONS[r.PositionOnMeasureId]; if (p in totalByPos) totalByPos[p]++; }
+    for (const k in hG) {
+      const rows = hG[k], date = (rows[0].MeetingDate || "");
+      const positions = {};
+      for (const pos of ["Support", "Oppose", "Neutral"]) {
+        const recs = rows.filter(r => POSITIONS[r.PositionOnMeasureId] === pos);
+        const orgs = {}; let individuals = 0;
+        for (const r of recs) { const a = affiliation(r); if (a) orgs[a] = (orgs[a] || 0) + 1; else individuals++; }
+        positions[pos] = {
+          count: recs.length, individuals,
+          orgs: Object.entries(orgs).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+            .map(([name, count]) => ({ name, count })),
+        };
+      }
+      hearings.push({ where: cname(rows[0].CommitteeCode), date: date.slice(0, 10),
+        version: versionAt(tl, date), positions });
+    }
+    hearings.sort((a, b) => a.date.localeCompare(b.date));
+
+    const versions = [];
+    const seen = new Set();
+    for (const d of docs) {
+      const n = d.VersionDescription || "";
+      if (MAIN_VERSION.test(n) && !seen.has(n)) { seen.add(n); versions.push({ name: n, url: d.DocumentUrl }); }
+    }
+    versions.sort((a, b) => versionRank(a.name) - versionRank(b.name));
+
+    return { votes, testimony: { total: test.length, byPosition: totalByPos, hearings }, versions };
+  });
+}
+function versionRank(name) {
+  const i = ["Introduced", "A-Engrossed", "B-Engrossed", "C-Engrossed", "D-Engrossed", "Enrolled"].indexOf(name);
+  return i < 0 ? 50 : i;
+}
+
 function nowHHMM() {
   const d = new Date();
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;

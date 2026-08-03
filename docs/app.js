@@ -178,11 +178,30 @@ function committeeStatus(start, end, now) {
 }
 
 // ── session-wide reference data (bulk, cached) ───────────────────────────────
+// LegislatorCode -> party across ALL sessions, keeping only codes whose party
+// is consistent everywhere. Fallback for vote-casters missing from a session's
+// roster snapshot (mid-session departures/chamber moves); ambiguous codes
+// (party-switchers, reused surnames) are dropped so it never guesses.
+function globalParty() {
+  return cached("leg:__global__", async () => {
+    const rows = await fetchAll("Legislators");
+    const parties = {};
+    for (const r of rows) {
+      const code = r.LegislatorCode, p = partyLetter(r.Party);
+      if (code in parties && parties[code] !== p) parties[code] = null;
+      else if (!(code in parties)) parties[code] = p;
+    }
+    const out = {};
+    for (const c in parties) if (parties[c]) out[c] = parties[c];
+    return out;
+  });
+}
 function legislatorParty(session) {
   return cached(`leg:${session}`, async () => {
-    const rows = await fetchAll("Legislators", `SessionKey eq '${session}'`);
-    const o = {};
-    for (const r of rows) o[r.LegislatorCode] = partyLetter(r.Party);
+    const [rows, global] = await Promise.all([
+      fetchAll("Legislators", `SessionKey eq '${session}'`), globalParty()]);
+    const o = { ...global };                 // cross-session fallback first…
+    for (const r of rows) o[r.LegislatorCode] = partyLetter(r.Party);  // …session roster wins
     return o;
   });
 }

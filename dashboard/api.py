@@ -160,11 +160,38 @@ def _key(prefix, number) -> tuple[str, int]:
 # ── Session-wide reference data (bulk, cached) ───────────────────────────────
 
 
+def get_global_party_map() -> dict[str, str]:
+    """
+    LegislatorCode -> party across ALL sessions, keeping only codes whose party
+    is consistent everywhere. Used as a fallback for members who cast votes but
+    are missing from a given session's roster snapshot (they left mid-session —
+    e.g. a death, resignation, or mid-session chamber move). Ambiguous codes
+    (party-switchers, or the same surname reused in different eras) are dropped
+    so the fallback never guesses.
+    """
+    def fetch():
+        rows = fetch_all("Legislators")
+        parties: dict[str, str | None] = {}
+        for r in rows:
+            code = r.get("LegislatorCode")
+            p = party_letter(r.get("Party"))
+            if code in parties and parties[code] != p:
+                parties[code] = None  # conflicting -> ambiguous
+            else:
+                parties.setdefault(code, p)
+        return {c: p for c, p in parties.items() if p and c}
+    return cached_fetch("legislators:__global__", fetch)
+
+
 def get_legislator_party_map(session_key: str) -> dict[str, str]:
-    """LegislatorCode -> 'D'/'R'/'I'."""
+    """LegislatorCode -> 'D'/'R'/'I' for a session (this session's roster wins;
+    cross-session fallback fills in members absent from the snapshot)."""
     def fetch():
         rows = fetch_all("Legislators", f"SessionKey eq '{session_key}'")
-        return {r["LegislatorCode"]: party_letter(r.get("Party")) for r in rows}
+        m = {r["LegislatorCode"]: party_letter(r.get("Party")) for r in rows}
+        for code, p in get_global_party_map().items():
+            m.setdefault(code, p)  # only fill gaps; the session roster is authoritative
+        return m
     return cached_fetch(f"legislators:{session_key}", fetch)
 
 

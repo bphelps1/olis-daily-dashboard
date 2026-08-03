@@ -34,13 +34,13 @@
   }
  ],
  "passedBoth": 153,
- "bipartisanBoth": 136,
+ "bipartisan": 143,
  "partyLineAny": 15,
  "unanimousBoth": 38,
  "passedOne": 13,
  "bills": {
   "passed": 143,
-  "bipartisan": 126
+  "bipartisan": 133
  },
  "precomputed": true
 }

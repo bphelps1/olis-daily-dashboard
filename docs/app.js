@@ -459,7 +459,7 @@ function sessionStats(session) {
       byPrefix[m.MeasurePrefix] = (byPrefix[m.MeasurePrefix] || 0) + 1;
       if (m.ChapterNumber != null) enacted++;
     }
-    let passedBoth = 0, bipartisanBoth = 0, partyLineAny = 0, unanimousBoth = 0, passedOne = 0;
+    let passedBoth = 0, bipartisan = 0, partyLineAny = 0, unanimousBoth = 0, passedOne = 0;
     let billsPassed = 0, billsBipartisan = 0;
     for (const k in fvotes) {
       const byCh = { House: [], Senate: [] };
@@ -467,18 +467,19 @@ function sessionStats(session) {
       const h = analyzeChamberVote(byCh.House), s = analyzeChamberVote(byCh.Senate);
       if (h && s) {
         passedBoth++;
-        if (h.bipartisan && s.bipartisan) bipartisanBoth++;
+        // bipartisan = cross-party Aye support in at least one chamber
+        if (h.bipartisan || s.bipartisan) bipartisan++;
         if (h.partyLine || s.partyLine) partyLineAny++;
         if (h.unanimous && s.unanimous) unanimousBoth++;
         const pfx = (measures[k] || {}).MeasurePrefix;
-        if (pfx === "HB" || pfx === "SB") { billsPassed++; if (h.bipartisan && s.bipartisan) billsBipartisan++; }
+        if (pfx === "HB" || pfx === "SB") { billsPassed++; if (h.bipartisan || s.bipartisan) billsBipartisan++; }
       } else if (h || s) { passedOne++; }
     }
     const byPrefixArr = Object.entries(byPrefix).sort((a, b) => b[1] - a[1])
       .map(([prefix, count]) => ({ prefix, count }));
     return {
       session, session_name: await sessionName(session), total, enacted, byPrefix: byPrefixArr,
-      passedBoth, bipartisanBoth, partyLineAny, unanimousBoth, passedOne,
+      passedBoth, bipartisan, partyLineAny, unanimousBoth, passedOne,
       bills: { passed: billsPassed, bipartisan: billsBipartisan },
     };
   });

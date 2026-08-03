@@ -605,7 +605,7 @@ def stats():
             if m.get("ChapterNumber") is not None:
                 enacted += 1
 
-        passed_both = bipartisan_both = party_line_any = unanimous_both = passed_one = 0
+        passed_both = bipartisan = party_line_any = unanimous_both = passed_one = 0
         bills_passed = bills_bipartisan = 0
         for k, votes in fvotes.items():
             by_ch = {"House": [], "Senate": []}
@@ -616,8 +616,9 @@ def stats():
             s = _analyze_chamber_vote(by_ch["Senate"])
             if h and s:
                 passed_both += 1
-                if h["bipartisan"] and s["bipartisan"]:
-                    bipartisan_both += 1
+                # bipartisan = cross-party Aye support in at least one chamber
+                if h["bipartisan"] or s["bipartisan"]:
+                    bipartisan += 1
                 if h["partyLine"] or s["partyLine"]:
                     party_line_any += 1
                 if h["unanimous"] and s["unanimous"]:
@@ -625,7 +626,7 @@ def stats():
                 pfx = (measures.get(k) or {}).get("MeasurePrefix")
                 if pfx in ("HB", "SB"):
                     bills_passed += 1
-                    if h["bipartisan"] and s["bipartisan"]:
+                    if h["bipartisan"] or s["bipartisan"]:
                         bills_bipartisan += 1
             elif h or s:
                 passed_one += 1
@@ -635,7 +636,7 @@ def stats():
         return jsonify({
             "session": session_key, "session_name": api.session_name(session_key),
             "total": total, "enacted": enacted, "byPrefix": by_prefix_arr,
-            "passedBoth": passed_both, "bipartisanBoth": bipartisan_both,
+            "passedBoth": passed_both, "bipartisan": bipartisan,
             "partyLineAny": party_line_any, "unanimousBoth": unanimous_both,
             "passedOne": passed_one,
             "bills": {"passed": bills_passed, "bipartisan": bills_bipartisan},

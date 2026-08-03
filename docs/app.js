@@ -319,6 +319,13 @@ async function sessionName(k) {
   const s = (await getSessions()).find(s => s.key === k);
   return s ? s.name : k;
 }
+// most recent regular session (…R1) — used for session-wide stats, since the
+// interim (…I1) that "auto" resolves to today has no floor-passed bills
+async function latestRegularSession() {
+  const sessions = await getSessions();  // sorted by begin desc
+  const reg = sessions.find(s => /R\d+$/i.test(s.key) && (s.begin || "") <= todayISO());
+  return (reg || sessions[0] || { key: "" }).key;
+}
 function resolveSessionForDate(date) {
   return cached(`resolve:${date}`, async () => {
     for (const [ep, field] of [["CommitteeMeetings", "MeetingDate"], ["FloorSessionAgendaItems", "ScheduleDate"]]) {
@@ -419,6 +426,56 @@ async function committeeDetail(code, session, date) {
   }
   const name = ((await committeesMap(session))[code] || {}).name || code;
   return { code, name, bills, topics };
+}
+
+// ── session-wide statistics ──────────────────────────────────────────────────
+function analyzeChamberVote(arr) {
+  // returns null if the chamber didn't pass; else {bipartisan, partyLine, unanimous}
+  if (!arr.length) return null;
+  const aye = arr.filter(v => v.Vote === "Yea").length;
+  const nay = arr.filter(v => v.Vote === "Nay").length;
+  if (aye <= nay) return null;
+  const dAye = arr.some(v => v.Party === "D" && v.Vote === "Yea");
+  const rAye = arr.some(v => v.Party === "R" && v.Vote === "Yea");
+  const dv = arr.filter(v => v.Party === "D" && (v.Vote === "Yea" || v.Vote === "Nay")).map(v => v.Vote);
+  const rv = arr.filter(v => v.Party === "R" && (v.Vote === "Yea" || v.Vote === "Nay")).map(v => v.Vote);
+  const partyLine = dv.length && rv.length && new Set(dv).size === 1 && new Set(rv).size === 1 && dv[0] !== rv[0];
+  return { bipartisan: dAye && rAye, partyLine, unanimous: nay === 0 };
+}
+function sessionStats(session) {
+  return cached(`stats:${session}`, async () => {
+    const [measures, fvotes] = await Promise.all([measuresMap(session), floorVotesByBill(session)]);
+    let total = 0, enacted = 0;
+    const byPrefix = {};
+    for (const k in measures) {
+      const m = measures[k];
+      total++;
+      byPrefix[m.MeasurePrefix] = (byPrefix[m.MeasurePrefix] || 0) + 1;
+      if (m.ChapterNumber != null) enacted++;
+    }
+    let passedBoth = 0, bipartisanBoth = 0, partyLineAny = 0, unanimousBoth = 0, passedOne = 0;
+    let billsPassed = 0, billsBipartisan = 0;
+    for (const k in fvotes) {
+      const byCh = { House: [], Senate: [] };
+      for (const v of fvotes[k]) if (byCh[v.Chamber]) byCh[v.Chamber].push(v);
+      const h = analyzeChamberVote(byCh.House), s = analyzeChamberVote(byCh.Senate);
+      if (h && s) {
+        passedBoth++;
+        if (h.bipartisan && s.bipartisan) bipartisanBoth++;
+        if (h.partyLine || s.partyLine) partyLineAny++;
+        if (h.unanimous && s.unanimous) unanimousBoth++;
+        const pfx = (measures[k] || {}).MeasurePrefix;
+        if (pfx === "HB" || pfx === "SB") { billsPassed++; if (h.bipartisan && s.bipartisan) billsBipartisan++; }
+      } else if (h || s) { passedOne++; }
+    }
+    const byPrefixArr = Object.entries(byPrefix).sort((a, b) => b[1] - a[1])
+      .map(([prefix, count]) => ({ prefix, count }));
+    return {
+      session, session_name: await sessionName(session), total, enacted, byPrefix: byPrefixArr,
+      passedBoth, bipartisanBoth, partyLineAny, unanimousBoth, passedOne,
+      bills: { passed: billsPassed, bipartisan: billsBipartisan },
+    };
+  });
 }
 
 // ── per-bill history: votes (by version) + testimony (by hearing/version) ─────

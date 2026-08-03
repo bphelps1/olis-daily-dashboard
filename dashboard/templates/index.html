@@ -39,6 +39,7 @@
       <li class="nav-item"><button class="nav-link"        data-tab="comm-house"    data-endpoint="/api/committees/house">House Committees</button></li>
       <li class="nav-item"><button class="nav-link"        data-tab="comm-senate"   data-endpoint="/api/committees/senate">Senate Committees</button></li>
       <li class="nav-item"><button class="nav-link"        data-tab="comm-joint"    data-endpoint="/api/committees/joint">Joint Committees</button></li>
+      <li class="nav-item"><button class="nav-link ms-lg-3" data-tab="stats"        data-endpoint="/api/stats">📊 Session Stats</button></li>
     </ul>
 
     <div class="tab-body border border-top-0 rounded-bottom p-3" id="tabBody">
@@ -213,6 +214,12 @@
 
   function renderBanner() {
     const el = document.getElementById('modeBanner');
+    if (state.activeTab === 'stats') {
+      const name = state.resolved ? (state.resolved.name || state.resolved.session) : '';
+      el.innerHTML = `<span class="badge text-bg-dark">📊 Session statistics</span>` +
+        (name ? `<span class="text-muted small ms-2">${esc(name)}</span>` : '');
+      return;
+    }
     const cmp = state.date < state.today ? 'past' : (state.date > state.today ? 'future' : 'today');
     if (cmp === 'today') {
       const t = state.lastFetch[cacheKey(state.activeTab)];
@@ -303,6 +310,34 @@
     return html;
   }
 
+  // ── rendering: session stats ────────────────────────────────────────
+  function renderStats(data) {
+    if (data.error) return `<div class="alert alert-warning mb-0">${esc(data.error)}</div>`;
+    const pct = (a, b) => b ? Math.round(100 * a / b) + '%' : '—';
+    const tile = (num, label, sub) =>
+      `<div class="stat-tile"><div class="stat-num">${num}</div><div class="stat-label">${label}</div>${sub?`<div class="stat-sub">${sub}</div>`:''}</div>`;
+    const tiles = [
+      tile(data.total, 'Measures introduced'),
+      tile(data.bills.passed, 'Bills passed both chambers', 'HB &amp; SB'),
+      tile(data.bills.bipartisan, 'Bipartisan bills', `${pct(data.bills.bipartisan, data.bills.passed)} of bills passed`),
+      tile(data.enacted, 'Enacted into law'),
+    ].join('');
+    const passage = `<div class="bd-section"><div class="bd-head">Passage — all measures</div>
+      <div class="stat-line"><b>${data.passedBoth}</b> passed both chambers</div>
+      <div class="stat-line"><span class="dot text-success">●</span> ${data.bipartisanBoth} bipartisan in both chambers <span class="text-muted">(${pct(data.bipartisanBoth, data.passedBoth)})</span></div>
+      <div class="stat-line"><span class="dot text-secondary">●</span> ${data.unanimousBoth} unanimous — no No votes either chamber</div>
+      <div class="stat-line"><span class="dot text-warning">●</span> ${data.partyLineAny} party-line in ≥1 chamber</div>
+      <div class="stat-line text-muted">${data.passedOne} passed one chamber only</div></div>`;
+    const max = Math.max(...data.byPrefix.map(p => p.count), 1);
+    const bars = data.byPrefix.map(p =>
+      `<div class="pfx-row"><span class="pfx-name">${esc(p.prefix)}</span><span class="pfx-track"><span class="pfx-bar" style="width:${Math.round(100*p.count/max)}%"></span></span><span class="pfx-count">${p.count}</span></div>`).join('');
+    const byType = `<div class="bd-section"><div class="bd-head">Measures by type</div>${bars}</div>`;
+    const caption = `<div class="bd-caveat">Bipartisan = at least one Democrat and one Republican voted Aye on final passage in <em>each</em> chamber. Party-line = every voting D one way and every voting R the other. Based on the latest floor roll call per chamber; "enacted" = has a chapter number.</div>`;
+    return `<div class="stat-note text-muted small mb-2">Session-wide totals for <b>${esc(data.session_name)}</b> — the date filter doesn't apply to this tab.</div>
+      <div class="stat-tiles">${tiles}</div>
+      <div class="bd-grid mt-3">${passage}${byType}</div>${caption}`;
+  }
+
   // ── committee expand/collapse + lazy agenda load ────────────────────
   async function loadAgenda(card) {
     const body = card.querySelector('.committee-body');
@@ -363,7 +398,8 @@
 
   function paint(tab, data) {
     if (state.activeTab !== tab) return;
-    if (tab.startsWith('floor')) tabBody.innerHTML = renderFloor(data);
+    if (tab === 'stats') tabBody.innerHTML = renderStats(data);
+    else if (tab.startsWith('floor')) tabBody.innerHTML = renderFloor(data);
     else { tabBody.innerHTML = renderCommittees(data); autoLoadOpen(); }
   }
 

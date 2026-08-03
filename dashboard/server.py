@@ -551,6 +551,90 @@ def bill_history(prefix, number):
         return jsonify({"error": f"Data unavailable — {e}"}), 502
 
 
+# ── session-wide statistics ──────────────────────────────────────────────────
+
+def _latest_regular_session() -> str:
+    """Most recent regular (…R1) session — stats are meaningless for the interim."""
+    today = date_cls.today().isoformat()
+    sessions = api.get_sessions()  # sorted by begin desc
+    for s in sessions:
+        if re.search(r"R\d+$", s["key"], re.I) and (s.get("begin") or "") <= today:
+            return s["key"]
+    return sessions[0]["key"] if sessions else today[:4] + "R1"
+
+
+def _analyze_chamber_vote(arr: list[dict]) -> dict | None:
+    """None if the chamber didn't pass; else {bipartisan, partyLine, unanimous}."""
+    if not arr:
+        return None
+    aye = sum(1 for v in arr if v["Vote"] == "Yea")
+    nay = sum(1 for v in arr if v["Vote"] == "Nay")
+    if aye <= nay:
+        return None
+    d_aye = any(v["Party"] == "D" and v["Vote"] == "Yea" for v in arr)
+    r_aye = any(v["Party"] == "R" and v["Vote"] == "Yea" for v in arr)
+    dv = [v["Vote"] for v in arr if v["Party"] == "D" and v["Vote"] in ("Yea", "Nay")]
+    rv = [v["Vote"] for v in arr if v["Party"] == "R" and v["Vote"] in ("Yea", "Nay")]
+    party_line = bool(dv and rv and len(set(dv)) == 1 and len(set(rv)) == 1 and dv[0] != rv[0])
+    return {"bipartisan": d_aye and r_aye, "partyLine": party_line, "unanimous": nay == 0}
+
+
+@app.route("/api/stats")
+def stats():
+    session_key = request.args.get("session", "").strip()
+    if not session_key or session_key.lower() == "auto":
+        session_key = _latest_regular_session()
+    try:
+        measures = api.get_measures_map(session_key)
+        fvotes = api.get_floor_votes_by_bill(session_key)
+
+        total = enacted = 0
+        by_prefix: dict = {}
+        for m in measures.values():
+            total += 1
+            by_prefix[m.get("MeasurePrefix")] = by_prefix.get(m.get("MeasurePrefix"), 0) + 1
+            if m.get("ChapterNumber") is not None:
+                enacted += 1
+
+        passed_both = bipartisan_both = party_line_any = unanimous_both = passed_one = 0
+        bills_passed = bills_bipartisan = 0
+        for k, votes in fvotes.items():
+            by_ch = {"House": [], "Senate": []}
+            for v in votes:
+                if v["Chamber"] in by_ch:
+                    by_ch[v["Chamber"]].append(v)
+            h = _analyze_chamber_vote(by_ch["House"])
+            s = _analyze_chamber_vote(by_ch["Senate"])
+            if h and s:
+                passed_both += 1
+                if h["bipartisan"] and s["bipartisan"]:
+                    bipartisan_both += 1
+                if h["partyLine"] or s["partyLine"]:
+                    party_line_any += 1
+                if h["unanimous"] and s["unanimous"]:
+                    unanimous_both += 1
+                pfx = (measures.get(k) or {}).get("MeasurePrefix")
+                if pfx in ("HB", "SB"):
+                    bills_passed += 1
+                    if h["bipartisan"] and s["bipartisan"]:
+                        bills_bipartisan += 1
+            elif h or s:
+                passed_one += 1
+
+        by_prefix_arr = [{"prefix": p, "count": c} for p, c in
+                         sorted(by_prefix.items(), key=lambda kv: -kv[1])]
+        return jsonify({
+            "session": session_key, "session_name": api.session_name(session_key),
+            "total": total, "enacted": enacted, "byPrefix": by_prefix_arr,
+            "passedBoth": passed_both, "bipartisanBoth": bipartisan_both,
+            "partyLineAny": party_line_any, "unanimousBoth": unanimous_both,
+            "passedOne": passed_one,
+            "bills": {"passed": bills_passed, "bipartisan": bills_bipartisan},
+        })
+    except requests.RequestException as e:
+        return jsonify({"error": f"Data unavailable — {e}"}), 502
+
+
 def main():
     import os
     # Default to 5001 — macOS reserves 5000 for the AirPlay Receiver.

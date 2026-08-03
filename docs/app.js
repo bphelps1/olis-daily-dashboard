@@ -444,6 +444,12 @@ function analyzeChamberVote(arr) {
 }
 function sessionStats(session) {
   return cached(`stats:${session}`, async () => {
+    // precomputed file for completed sessions loads instantly; the current /
+    // in-progress session has no file and falls back to live computation below.
+    try {
+      const r = await fetch(`stats/${encodeURIComponent(session)}.json`, { cache: "no-cache" });
+      if (r.ok) { const j = await r.json(); if (j && j.session) return j; }
+    } catch (e) { /* fall through to live compute */ }
     const [measures, fvotes] = await Promise.all([measuresMap(session), floorVotesByBill(session)]);
     let total = 0, enacted = 0;
     const byPrefix = {};

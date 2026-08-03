@@ -584,6 +584,15 @@ def stats():
     session_key = request.args.get("session", "").strip()
     if not session_key or session_key.lower() == "auto":
         session_key = _latest_regular_session()
+    # precomputed file for completed sessions (instant); missing -> compute live
+    import json
+    from pathlib import Path
+    pre = Path(__file__).parent / "stats" / f"{session_key}.json"
+    if pre.exists():
+        try:
+            return jsonify(json.loads(pre.read_text()))
+        except Exception:
+            pass
     try:
         measures = api.get_measures_map(session_key)
         fvotes = api.get_floor_votes_by_bill(session_key)

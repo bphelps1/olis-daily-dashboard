@@ -1,0 +1,46 @@
+{
+ "session": "2026R1",
+ "session_name": "2026 Regular Session",
+ "total": 304,
+ "enacted": 142,
+ "byPrefix": [
+  {
+   "prefix": "HB",
+   "count": 183
+  },
+  {
+   "prefix": "SB",
+   "count": 103
+  },
+  {
+   "prefix": "SCR",
+   "count": 9
+  },
+  {
+   "prefix": "HCR",
+   "count": 4
+  },
+  {
+   "prefix": "SJR",
+   "count": 3
+  },
+  {
+   "prefix": "HJM",
+   "count": 1
+  },
+  {
+   "prefix": "HJR",
+   "count": 1
+  }
+ ],
+ "passedBoth": 153,
+ "bipartisanBoth": 136,
+ "partyLineAny": 15,
+ "unanimousBoth": 38,
+ "passedOne": 13,
+ "bills": {
+  "passed": 143,
+  "bipartisan": 126
+ },
+ "precomputed": true
+}

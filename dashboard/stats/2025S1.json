@@ -1,0 +1,26 @@
+{
+ "session": "2025S1",
+ "session_name": "2025 1st Special Session",
+ "total": 3,
+ "enacted": 2,
+ "byPrefix": [
+  {
+   "prefix": "HB",
+   "count": 2
+  },
+  {
+   "prefix": "HCR",
+   "count": 1
+  }
+ ],
+ "passedBoth": 3,
+ "bipartisanBoth": 1,
+ "partyLineAny": 2,
+ "unanimousBoth": 1,
+ "passedOne": 0,
+ "bills": {
+  "passed": 2,
+  "bipartisan": 0
+ },
+ "precomputed": true
+}

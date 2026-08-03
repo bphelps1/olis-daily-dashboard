@@ -1,0 +1,58 @@
+{
+ "session": "2025R1",
+ "session_name": "2025 Regular Session",
+ "total": 3466,
+ "enacted": 634,
+ "byPrefix": [
+  {
+   "prefix": "HB",
+   "count": 2037
+  },
+  {
+   "prefix": "SB",
+   "count": 1267
+  },
+  {
+   "prefix": "HCR",
+   "count": 42
+  },
+  {
+   "prefix": "SCR",
+   "count": 34
+  },
+  {
+   "prefix": "SJR",
+   "count": 34
+  },
+  {
+   "prefix": "HJR",
+   "count": 22
+  },
+  {
+   "prefix": "HJM",
+   "count": 14
+  },
+  {
+   "prefix": "SJM",
+   "count": 10
+  },
+  {
+   "prefix": "HR",
+   "count": 3
+  },
+  {
+   "prefix": "SR",
+   "count": 3
+  }
+ ],
+ "passedBoth": 698,
+ "bipartisanBoth": 639,
+ "partyLineAny": 50,
+ "unanimousBoth": 222,
+ "passedOne": 67,
+ "bills": {
+  "passed": 641,
+  "bipartisan": 582
+ },
+ "precomputed": true
+}

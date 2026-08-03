@@ -1,0 +1,46 @@
+{
+ "session": "2024R1",
+ "session_name": "2024 Regular Session",
+ "total": 291,
+ "enacted": 115,
+ "byPrefix": [
+  {
+   "prefix": "HB",
+   "count": 170
+  },
+  {
+   "prefix": "SB",
+   "count": 96
+  },
+  {
+   "prefix": "SCR",
+   "count": 13
+  },
+  {
+   "prefix": "HCR",
+   "count": 6
+  },
+  {
+   "prefix": "HJR",
+   "count": 3
+  },
+  {
+   "prefix": "SJR",
+   "count": 2
+  },
+  {
+   "prefix": "HJM",
+   "count": 1
+  }
+ ],
+ "passedBoth": 133,
+ "bipartisanBoth": 123,
+ "partyLineAny": 10,
+ "unanimousBoth": 31,
+ "passedOne": 10,
+ "bills": {
+  "passed": 115,
+  "bipartisan": 105
+ },
+ "precomputed": true
+}

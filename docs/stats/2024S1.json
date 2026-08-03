@@ -1,0 +1,26 @@
+{
+ "session": "2024S1",
+ "session_name": "2024 1st Special Session",
+ "total": 2,
+ "enacted": 1,
+ "byPrefix": [
+  {
+   "prefix": "SCR",
+   "count": 1
+  },
+  {
+   "prefix": "SB",
+   "count": 1
+  }
+ ],
+ "passedBoth": 2,
+ "bipartisanBoth": 2,
+ "partyLineAny": 0,
+ "unanimousBoth": 0,
+ "passedOne": 0,
+ "bills": {
+  "passed": 1,
+  "bipartisan": 1
+ },
+ "precomputed": true
+}

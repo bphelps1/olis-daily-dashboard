@@ -504,6 +504,70 @@ function sessionStats(session) {
   });
 }
 
+// ── committee topic search (across all sessions) ─────────────────────────────
+function globalCommittees() {
+  // committee code -> name, keyed both by session|code and bare code (latest wins)
+  return cached("committees:__global__", async () => {
+    const rows = await fetchAll("Committees");
+    const o = {};
+    for (const r of rows) {
+      const name = r.CommitteeName || r.CommitteeCode;
+      o[`${r.SessionKey}|${r.CommitteeCode}`] = name;
+      o[r.CommitteeCode] = name;
+    }
+    return o;
+  });
+}
+function agendaUrl(session, code, meetingDate) {
+  if (!meetingDate || !meetingDate.includes("T")) return null;
+  const dt = meetingDate.slice(0, 16).replace("T", "-").replace(":", "-");  // 2026-06-16-08-30
+  return `${OLIS_BASE}/${session}/Downloads/CommitteeAgenda/${code}/${dt}`;
+}
+function snippetAround(comments, re) {
+  const c = stripTags(comments);
+  const m = c.match(re);
+  if (!m) return c.slice(0, 140);
+  const i = c.toLowerCase().indexOf(m[0].toLowerCase());
+  const start = Math.max(0, i - 60), end = Math.min(c.length, i + m[0].length + 90);
+  return (start > 0 ? "…" : "") + c.slice(start, end) + (end < c.length ? "…" : "");
+}
+async function searchTopics(term) {
+  term = (term || "").trim();
+  if (!term) return { query: "", total: 0, meetings: [] };
+  const q = term.replace(/'/g, "''");                      // OData escapes ' as ''
+  const data = await odata("CommitteeAgendaItems", {
+    "$filter": `substringof('${q}', Comments)`,
+    "$orderby": "MeetingDate desc",
+    "$top": "1000",
+    "$inlinecount": "allpages",
+  });
+  const rows = data.value || [];
+  const total = parseInt(data["odata.count"] || rows.length, 10) || rows.length;
+  const committees = await globalCommittees();
+  const re = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+  const meetings = new Map();
+  for (const r of rows) {
+    const code = r.CommitteCode;                            // note API typo (no 'e')
+    const mkey = `${r.SessionKey}|${code}|${(r.MeetingDate || "").slice(0, 16)}`;
+    if (!meetings.has(mkey)) {
+      meetings.set(mkey, {
+        session: r.SessionKey, code,
+        committee: committees[`${r.SessionKey}|${code}`] || committees[code] || code,
+        date: (r.MeetingDate || "").slice(0, 10),
+        agendaUrl: agendaUrl(r.SessionKey, code, r.MeetingDate),
+        items: [],
+      });
+    }
+    const snip = snippetAround(r.Comments, re);
+    const bill = r.MeasurePrefix ? `${r.MeasurePrefix} ${r.MeasureNumber}` : null;
+    const url = bill ? billUrl(r.SessionKey, r.MeasurePrefix, r.MeasureNumber) : null;
+    const m = meetings.get(mkey);
+    if (snip && !m.items.some(it => it.snippet === snip)) m.items.push({ bill, url, snippet: snip });
+  }
+  const list = [...meetings.values()];   // already newest-first from the query order
+  return { query: term, total, shown: list.length, capped: total > rows.length, meetings: list };
+}
+
 // ── per-bill history: votes (by version) + testimony (by hearing/version) ─────
 const POSITIONS = { 3983: "Support", 3981: "Neutral", 3982: "Oppose" };
 // free-text affiliation values that are clearly not organizations

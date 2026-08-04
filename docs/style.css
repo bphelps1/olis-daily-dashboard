@@ -164,6 +164,22 @@ table.table td:nth-child(5) {
 .pfx-track { flex: 1; background: #eef1f5; border-radius: 0.4rem; height: 0.7rem; overflow: hidden; }
 .pfx-bar { display: block; height: 100%; background: var(--olis-accent); }
 .pfx-count { width: 2.5rem; text-align: right; font-size: 0.82rem; color: #495057; }
+
+/* ── topic search ─────────────────────────────────────────── */
+.search-wrap { max-width: 900px; }
+.search-hit {
+  padding: 0.5rem 0;
+  border-top: 1px solid #e9ecef;
+}
+.search-hit:first-of-type { border-top: none; }
+.hit-head { margin-bottom: 0.2rem; }
+.hit-snippet {
+  font-size: 0.88rem;
+  color: #343a40;
+  padding: 0.1rem 0 0.1rem 1rem;
+  line-height: 1.4;
+}
+.hit-snippet mark { padding: 0 0.1em; background: #fff2a8; }
 .bd-caveat {
   font-size: 0.75rem;
   color: #8a6d3b;

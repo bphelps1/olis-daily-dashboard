@@ -235,6 +235,34 @@ def get_committees_map(session_key: str) -> dict[str, dict]:
     return cached_fetch(f"committees:{session_key}", fetch)
 
 
+def get_all_committees() -> dict[str, str]:
+    """Committee code -> name across ALL sessions (keyed by 'session|code' and bare code)."""
+    def fetch():
+        rows = fetch_all("Committees")
+        o = {}
+        for r in rows:
+            name = r.get("CommitteeName") or r.get("CommitteeCode")
+            o[f"{r.get('SessionKey')}|{r.get('CommitteeCode')}"] = name
+            o[r.get("CommitteeCode")] = name
+        return o
+    return cached_fetch("committees:__all__", fetch)
+
+
+def search_agenda_comments(term: str, top: int = 1000) -> tuple[list[dict], int]:
+    """Committee agenda items whose Comments contain `term` (case-insensitive,
+    across all sessions), newest first, with the total match count."""
+    q = term.replace("'", "''")
+    data = _fetch_page("CommitteeAgendaItems", f"substringof('{q}', Comments)",
+                       top, 0, "MeetingDate desc", True)
+    rows = data.get("value", data.get("d", {}).get("results", []))
+    raw = data.get("odata.count") or data.get("d", {}).get("__count") or data.get("__count")
+    try:
+        total = int(raw)
+    except (TypeError, ValueError):
+        total = len(rows)
+    return rows, total
+
+
 def get_committee_votes_by_bill(session_key: str) -> dict[tuple, list[dict]]:
     """
     (prefix, number) -> list of normalised committee vote records for the most

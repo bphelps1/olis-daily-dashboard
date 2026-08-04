@@ -645,6 +645,64 @@ def stats():
         return jsonify({"error": f"Data unavailable — {e}"}), 502
 
 
+# ── committee topic search (across all sessions) ─────────────────────────────
+
+def _agenda_url(session, code, meeting_date):
+    if not meeting_date or "T" not in meeting_date:
+        return None
+    dt = meeting_date[:16].replace("T", "-").replace(":", "-")  # 2026-06-16-08-30
+    return f"{api.OLIS_BASE}/{session}/Downloads/CommitteeAgenda/{code}/{dt}"
+
+
+def _snippet(comments, rx):
+    c = _strip_tags(comments)
+    m = rx.search(c)
+    if not m:
+        return c[:140]
+    i = m.start()
+    start, end = max(0, i - 60), min(len(c), i + len(m.group(0)) + 90)
+    return ("…" if start > 0 else "") + c[start:end] + ("…" if end < len(c) else "")
+
+
+@app.route("/api/search")
+def search():
+    term = (request.args.get("q") or "").strip()
+    if not term:
+        return jsonify({"query": "", "total": 0, "meetings": []})
+    try:
+        rows, total = api.search_agenda_comments(term)
+        committees = api.get_all_committees()
+        rx = re.compile(re.escape(term), re.I)
+        meetings: dict = {}
+        order = []
+        for r in rows:
+            code = r.get("CommitteCode")            # API typo (no 'e')
+            mkey = f"{r.get('SessionKey')}|{code}|{(r.get('MeetingDate') or '')[:16]}"
+            if mkey not in meetings:
+                meetings[mkey] = {
+                    "session": r.get("SessionKey"), "code": code,
+                    "committee": committees.get(f"{r.get('SessionKey')}|{code}")
+                    or committees.get(code) or code,
+                    "date": (r.get("MeetingDate") or "")[:10],
+                    "agendaUrl": _agenda_url(r.get("SessionKey"), code, r.get("MeetingDate")),
+                    "items": [],
+                }
+                order.append(mkey)
+            snip = _snippet(r.get("Comments"), rx)
+            bill = (f"{r.get('MeasurePrefix')} {r.get('MeasureNumber')}"
+                    if r.get("MeasurePrefix") else None)
+            url = (api.bill_url(r.get("SessionKey"), r.get("MeasurePrefix"), r.get("MeasureNumber"))
+                   if bill else None)
+            m = meetings[mkey]
+            if snip and not any(it["snippet"] == snip for it in m["items"]):
+                m["items"].append({"bill": bill, "url": url, "snippet": snip})
+        mlist = [meetings[k] for k in order]
+        return jsonify({"query": term, "total": total, "shown": len(mlist),
+                        "capped": total > len(rows), "meetings": mlist})
+    except requests.RequestException as e:
+        return jsonify({"error": f"Search failed — {e}"}), 502
+
+
 def main():
     import os
     # Default to 5001 — macOS reserves 5000 for the AirPlay Receiver.

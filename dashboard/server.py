@@ -650,8 +650,8 @@ def stats():
 def _agenda_url(session, code, meeting_date):
     if not meeting_date or "T" not in meeting_date:
         return None
-    dt = meeting_date[:16].replace("T", "-").replace(":", "-")  # 2026-06-16-08-30
-    return f"{api.OLIS_BASE}/{session}/Downloads/CommitteeAgenda/{code}/{dt}"
+    dt = meeting_date[:16].replace("T", "-").replace(":", "-")  # 2026-06-16-11-30
+    return f"{api.OLIS_BASE}/{session}/Committees/{code}/{dt}/Agenda"
 
 
 def _snippet(comments, rx):

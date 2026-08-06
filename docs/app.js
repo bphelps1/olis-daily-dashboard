@@ -520,8 +520,8 @@ function globalCommittees() {
 }
 function agendaUrl(session, code, meetingDate) {
   if (!meetingDate || !meetingDate.includes("T")) return null;
-  const dt = meetingDate.slice(0, 16).replace("T", "-").replace(":", "-");  // 2026-06-16-08-30
-  return `${OLIS_BASE}/${session}/Downloads/CommitteeAgenda/${code}/${dt}`;
+  const dt = meetingDate.slice(0, 16).replace("T", "-").replace(":", "-");  // 2026-06-16-11-30
+  return `${OLIS_BASE}/${session}/Committees/${code}/${dt}/Agenda`;
 }
 function snippetAround(comments, re) {
   const c = stripTags(comments);

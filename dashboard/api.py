@@ -195,6 +195,23 @@ def get_legislator_party_map(session_key: str) -> dict[str, str]:
     return cached_fetch(f"legislators:{session_key}", fetch)
 
 
+def get_legislator_list(session_key: str) -> list[dict]:
+    """Session roster for pickers: code, name, chamber, party, district."""
+    def fetch():
+        rows = fetch_all("Legislators", f"SessionKey eq '{session_key}'")
+        out = [{
+            "code": r.get("LegislatorCode"),
+            "name": f"{(r.get('FirstName') or '').strip()} "
+                    f"{(r.get('LastName') or '').strip()}".strip(),
+            "chamber": CHAMBER_NAME.get(r.get("Chamber"), r.get("Chamber")),
+            "party": party_letter(r.get("Party")),
+            "district": r.get("DistrictNumber"),
+        } for r in rows if r.get("LegislatorCode")]
+        out.sort(key=lambda x: ((x["name"] or x["code"] or "").lower()))
+        return out
+    return cached_fetch(f"leglist:{session_key}", fetch)
+
+
 def get_measures_map(session_key: str) -> dict[tuple, dict]:
     """(prefix, number) -> measure record (catchline, current location, chapter)."""
     def fetch():
@@ -203,22 +220,46 @@ def get_measures_map(session_key: str) -> dict[tuple, dict]:
     return cached_fetch(f"measures:{session_key}", fetch)
 
 
-def get_chief_sponsor_map(session_key: str) -> dict[tuple, str]:
-    """(prefix, number) -> chief sponsor display name."""
+def _print_order(v) -> int:
+    """PrintOrder is a STRING in the API — compare numerically, or '10' sorts before '2'."""
+    try:
+        return int(str(v).strip())
+    except (TypeError, ValueError):
+        return 9999
+
+
+def get_chief_sponsors_by_bill(session_key: str) -> dict[tuple, list[str]]:
+    """(prefix, number) -> chief sponsor codes in print order (first = primary)."""
     def fetch():
         rows = fetch_all("MeasureSponsors",
-                         f"SessionKey eq '{session_key}' and SponsorLevel eq 'Chief'",
-                         orderby="PrintOrder")
-        out: dict[tuple, str] = {}
+                         f"SessionKey eq '{session_key}' and SponsorLevel eq 'Chief'")
+        grouped: dict[tuple, list[dict]] = {}
         for r in rows:
-            k = _key(r.get("MeasurePrefix"), r.get("MeasureNumber"))
-            if k in out:
-                continue  # keep first (lowest PrintOrder) chief sponsor
-            name = r.get("LegislatoreCode") or r.get("CommitteeCode") or ""
-            if name:
-                out[k] = name
+            if not (r.get("LegislatoreCode") or r.get("CommitteeCode")):
+                continue
+            grouped.setdefault(_key(r.get("MeasurePrefix"), r.get("MeasureNumber")), []).append(r)
+        out: dict[tuple, list[str]] = {}
+        for k, recs in grouped.items():
+            recs.sort(key=lambda r: (_print_order(r.get("PrintOrder")),
+                                     str(r.get("LegislatoreCode") or r.get("CommitteeCode"))))
+            out[k] = [r.get("LegislatoreCode") or r.get("CommitteeCode") for r in recs]
         return out
-    return cached_fetch(f"sponsors:{session_key}", fetch)
+    return cached_fetch(f"chiefs:{session_key}", fetch)
+
+
+def get_chief_sponsor_map(session_key: str) -> dict[tuple, str]:
+    """(prefix, number) -> FIRST chief sponsor display name."""
+    return {k: v[0] for k, v in get_chief_sponsors_by_bill(session_key).items() if v}
+
+
+def get_sponsor_records(session_key: str, legislator_code: str) -> list[dict]:
+    """All MeasureSponsors rows for one legislator in a session (targeted, fast)."""
+    q = legislator_code.replace("'", "''")
+
+    def fetch():
+        return fetch_all("MeasureSponsors",
+                         f"SessionKey eq '{session_key}' and LegislatoreCode eq '{q}'")
+    return cached_fetch(f"sponsorrecs:{session_key}:{legislator_code}", fetch)
 
 
 def get_committees_map(session_key: str) -> dict[str, dict]:

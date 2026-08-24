@@ -213,19 +213,85 @@ function measuresMap(session) {
     return o;
   });
 }
-function chiefSponsorMap(session) {
-  return cached(`spon:${session}`, async () => {
+// PrintOrder is a STRING in the API — compare numerically, or "10" sorts before "2"
+function printOrder(v) {
+  const n = parseInt(String(v ?? "").trim(), 10);
+  return Number.isFinite(n) ? n : 9999;
+}
+// (prefix, number) -> chief sponsor codes in print order (first = primary)
+function chiefSponsorsByBill(session) {
+  return cached(`chiefs:${session}`, async () => {
     const rows = await fetchAll("MeasureSponsors",
-      `SessionKey eq '${session}' and SponsorLevel eq 'Chief'`, "PrintOrder");
-    const o = {};
+      `SessionKey eq '${session}' and SponsorLevel eq 'Chief'`);
+    const grouped = {};
     for (const r of rows) {
-      const k = key(r.MeasurePrefix, r.MeasureNumber);
-      if (k in o) continue;
-      const nm = r.LegislatoreCode || r.CommitteeCode || "";
-      if (nm) o[k] = nm;
+      if (!(r.LegislatoreCode || r.CommitteeCode)) continue;
+      (grouped[key(r.MeasurePrefix, r.MeasureNumber)] ||= []).push(r);
+    }
+    const o = {};
+    for (const k in grouped) {
+      grouped[k].sort((a, b) => printOrder(a.PrintOrder) - printOrder(b.PrintOrder) ||
+        String(a.LegislatoreCode || a.CommitteeCode).localeCompare(String(b.LegislatoreCode || b.CommitteeCode)));
+      o[k] = grouped[k].map(r => r.LegislatoreCode || r.CommitteeCode);
     }
     return o;
   });
+}
+async function chiefSponsorMap(session) {
+  const byBill = await chiefSponsorsByBill(session);
+  const o = {};
+  for (const k in byBill) if (byBill[k].length) o[k] = byBill[k][0];
+  return o;
+}
+// session roster for the picker
+function legislatorList(session) {
+  return cached(`leglist:${session}`, async () => {
+    const rows = await fetchAll("Legislators", `SessionKey eq '${session}'`);
+    const out = rows.filter(r => r.LegislatorCode).map(r => ({
+      code: r.LegislatorCode,
+      name: `${(r.FirstName || "").trim()} ${(r.LastName || "").trim()}`.trim(),
+      chamber: CHAMBER[r.Chamber] || r.Chamber,
+      party: partyLetter(r.Party),
+      district: r.DistrictNumber,
+    }));
+    out.sort((a, b) => (a.name || a.code || "").toLowerCase().localeCompare((b.name || b.code || "").toLowerCase()));
+    return out;
+  });
+}
+// all sponsor rows for one legislator (targeted, fast)
+function sponsorRecords(session, code) {
+  return cached(`sponrecs:${session}:${code}`, () => fetchAll("MeasureSponsors",
+    `SessionKey eq '${session}' and LegislatoreCode eq '${String(code).replace(/'/g, "''")}'`));
+}
+// mode: 'first' | 'chief' | 'any'
+async function sponsorSearch(session, code, mode) {
+  if (!code) return { code: "", mode, bills: [], counts: {} };
+  const [records, chiefs, measures] = await Promise.all([
+    sponsorRecords(session, code), chiefSponsorsByBill(session), measuresMap(session)]);
+  const counts = { first: 0, chief: 0, any: 0 };
+  const bills = [];
+  for (const r of records) {
+    const k = key(r.MeasurePrefix, r.MeasureNumber);
+    const billChiefs = chiefs[k] || [];
+    const isChief = r.SponsorLevel === "Chief";
+    const isFirst = billChiefs.length > 0 && billChiefs[0] === code;
+    counts.any++;
+    if (isChief) counts.chief++;
+    if (isFirst) counts.first++;
+    if (mode === "first" && !isFirst) continue;
+    if (mode === "chief" && !isChief) continue;
+    const m = measures[k] || {};
+    bills.push({
+      bill: `${r.MeasurePrefix} ${r.MeasureNumber}`, prefix: r.MeasurePrefix, number: r.MeasureNumber,
+      url: billUrl(session, r.MeasurePrefix, r.MeasureNumber),
+      catchline: m.CatchLine || "", status: m.CurrentLocation || "", chapter: m.ChapterNumber,
+      role: isFirst ? "First chief" : (isChief ? "Chief" : "Regular"),
+      sponsor_type: r.SponsorType || "",
+      cosponsors: billChiefs.filter(c => c !== code),
+    });
+  }
+  bills.sort((a, b) => a.prefix.localeCompare(b.prefix) || a.number - b.number);
+  return { session, session_name: await sessionName(session), code, mode, counts, bills };
 }
 function committeesMap(session) {
   return cached(`cmap:${session}`, async () => {

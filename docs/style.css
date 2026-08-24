@@ -180,6 +180,14 @@ table.table td:nth-child(5) {
   line-height: 1.4;
 }
 .hit-snippet mark { padding: 0 0.1em; background: #fff2a8; }
+
+/* ── sponsor search ───────────────────────────────────────── */
+.sponsor-wrap .mode-count {
+  font-size: 0.75em;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+.sponsor-wrap table td:nth-child(2) { min-width: 260px; }
 .bd-caveat {
   font-size: 0.75rem;
   color: #8a6d3b;

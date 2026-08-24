@@ -703,6 +703,77 @@ def search():
         return jsonify({"error": f"Search failed — {e}"}), 502
 
 
+# ── sponsor search ───────────────────────────────────────────────────────────
+
+SPONSOR_MODES = ("first", "chief", "any")
+
+
+def _sponsor_session() -> str:
+    """Sponsors are per-session; 'auto' uses the latest regular session (the
+    interim has no measures)."""
+    s = request.args.get("session", "").strip()
+    return _latest_regular_session() if (not s or s.lower() == "auto") else s
+
+
+@app.route("/api/legislators")
+def legislators():
+    session_key = _sponsor_session()
+    try:
+        return jsonify({"session": session_key,
+                        "session_name": api.session_name(session_key),
+                        "legislators": api.get_legislator_list(session_key)})
+    except requests.RequestException as e:
+        return jsonify({"error": f"Data unavailable — {e}"}), 502
+
+
+@app.route("/api/sponsor")
+def sponsor():
+    session_key = _sponsor_session()
+    code = (request.args.get("code") or "").strip()
+    mode = (request.args.get("mode") or "first").strip().lower()
+    if mode not in SPONSOR_MODES:
+        mode = "first"
+    if not code:
+        return jsonify({"code": "", "mode": mode, "bills": [], "counts": {}})
+    try:
+        records = api.get_sponsor_records(session_key, code)
+        chiefs = api.get_chief_sponsors_by_bill(session_key)
+        measures = api.get_measures_map(session_key)
+
+        counts = {"first": 0, "chief": 0, "any": 0}
+        bills = []
+        for r in records:
+            k = (r.get("MeasurePrefix") or "", r.get("MeasureNumber") or 0)
+            bill_chiefs = chiefs.get(k, [])
+            is_chief = r.get("SponsorLevel") == "Chief"
+            is_first = bool(bill_chiefs) and bill_chiefs[0] == code
+            counts["any"] += 1
+            if is_chief:
+                counts["chief"] += 1
+            if is_first:
+                counts["first"] += 1
+            if mode == "first" and not is_first:
+                continue
+            if mode == "chief" and not is_chief:
+                continue
+            m = measures.get(k, {})
+            bills.append({
+                "bill": f"{k[0]} {k[1]}", "prefix": k[0], "number": k[1],
+                "url": api.bill_url(session_key, k[0], k[1]),
+                "catchline": m.get("CatchLine") or "",
+                "status": m.get("CurrentLocation") or "",
+                "chapter": m.get("ChapterNumber"),
+                "role": "First chief" if is_first else ("Chief" if is_chief else "Regular"),
+                "sponsor_type": r.get("SponsorType") or "",
+                "cosponsors": [c for c in bill_chiefs if c != code],
+            })
+        bills.sort(key=lambda b: (b["prefix"], b["number"]))
+        return jsonify({"session": session_key, "session_name": api.session_name(session_key),
+                        "code": code, "mode": mode, "counts": counts, "bills": bills})
+    except requests.RequestException as e:
+        return jsonify({"error": f"Data unavailable — {e}"}), 502
+
+
 def main():
     import os
     # Default to 5001 — macOS reserves 5000 for the AirPlay Receiver.

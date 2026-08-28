@@ -15,6 +15,7 @@ Chamber in {'House','Senate'}, Party in {'D','R','I'}.
 """
 from __future__ import annotations
 
+import re
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -250,6 +251,86 @@ def get_chief_sponsors_by_bill(session_key: str) -> dict[tuple, list[str]]:
 def get_chief_sponsor_map(session_key: str) -> dict[tuple, str]:
     """(prefix, number) -> FIRST chief sponsor display name."""
     return {k: v[0] for k, v in get_chief_sponsors_by_bill(session_key).items() if v}
+
+
+# ── committee bills ──────────────────────────────────────────────────────────
+# Two distinct relationships, both surfaced in the Sponsors tab:
+#   introduced by  -> MeasureSponsors.SponsorType == 'Committee' (+ CommitteeCode)
+#   at the request -> Measures.AtTheRequestOf text names an interim/other committee
+_REQUEST_RE = re.compile(
+    r"(house|senate|joint)?\s*(?:interim\s+)?committee on\s+(.+?)(?:\s+for\s+|\)|$)", re.I)
+
+
+def _norm_cmte(s: str | None) -> str:
+    return re.sub(r"[^a-z0-9 ]", " ", re.sub(r"\s+", " ", (s or "").lower())).strip()
+
+
+def match_requested_committees(text: str | None, committees: dict[str, dict]) -> list[str]:
+    """Committee codes named in a measure's AtTheRequestOf text.
+
+    Anchored on 'Committee on <name>' and disambiguated by chamber, since both
+    chambers have committees with the same short names (e.g. 'Rules'). Interim
+    names are often longer than the session name ('Rules and Executive
+    Appointments' vs 'Rules'), so prefix matching runs both directions and the
+    longest match wins.
+    """
+    hits: list[str] = []
+    for m in _REQUEST_RE.finditer(text or ""):
+        chamber = (m.group(1) or "").lower()
+        name = _norm_cmte(m.group(2))
+        best_code, best_len = None, -1
+        for code, info in committees.items():
+            cn = _norm_cmte(info.get("name"))
+            if not cn:
+                continue
+            if chamber and info.get("chamber") != chamber:
+                continue
+            if name.startswith(cn) or cn.startswith(name):
+                if len(cn) > best_len:
+                    best_code, best_len = code, len(cn)
+        if best_code and best_code not in hits:
+            hits.append(best_code)
+    return hits
+
+
+def get_committee_bill_index(session_key: str) -> dict[str, dict[str, list]]:
+    """CommitteeCode -> {'introduced': [(prefix, number)], 'requested': [...]}."""
+    def fetch():
+        committees = get_committees_map(session_key)
+        idx: dict[str, dict[str, list]] = {}
+
+        def slot(code):
+            return idx.setdefault(code, {"introduced": [], "requested": []})
+
+        for r in fetch_all("MeasureSponsors",
+                           f"SessionKey eq '{session_key}' and SponsorType eq 'Committee'"):
+            code = r.get("CommitteeCode")
+            if code:
+                slot(code)["introduced"].append(_key(r.get("MeasurePrefix"),
+                                                     r.get("MeasureNumber")))
+        for k, m in get_measures_map(session_key).items():
+            txt = m.get("AtTheRequestOf") or ""
+            if "committee" not in txt.lower():
+                continue
+            for code in match_requested_committees(txt, committees):
+                slot(code)["requested"].append(k)
+        return idx
+    return cached_fetch(f"cmtebills:{session_key}", fetch)
+
+
+def get_committee_sponsor_list(session_key: str) -> list[dict]:
+    """Committees that introduced or requested at least one bill, for the picker."""
+    idx = get_committee_bill_index(session_key)
+    committees = get_committees_map(session_key)
+    out = []
+    for code, buckets in idx.items():
+        info = committees.get(code, {"name": code, "chamber": "joint"})
+        both = {*buckets["introduced"], *buckets["requested"]}
+        out.append({"code": code, "name": info["name"], "chamber": info["chamber"],
+                    "introduced": len(buckets["introduced"]),
+                    "requested": len(buckets["requested"]), "total": len(both)})
+    out.sort(key=lambda c: (c["name"] or "").lower())
+    return out
 
 
 def get_sponsor_records(session_key: str, legislator_code: str) -> list[dict]:

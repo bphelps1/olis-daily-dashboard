@@ -258,6 +258,100 @@ function legislatorList(session) {
     return out;
   });
 }
+// ── committee bills ──────────────────────────────────────────────────────────
+// Two distinct relationships, both surfaced in the Sponsors tab:
+//   introduced by  -> MeasureSponsors.SponsorType === 'Committee' (+ CommitteeCode)
+//   at the request -> Measures.AtTheRequestOf text names an interim/other committee
+const REQUEST_RE = /(house|senate|joint)?\s*(?:interim\s+)?committee on\s+(.+?)(?:\s+for\s+|\)|$)/gi;
+function normCmte(s) {
+  return String(s || "").toLowerCase().replace(/\s+/g, " ").replace(/[^a-z0-9 ]/g, " ")
+    .replace(/\s+/g, " ").trim();
+}
+// Anchored on "Committee on <name>" and disambiguated by chamber (both chambers
+// have e.g. a "Rules" committee). Interim names are often longer than the session
+// name, so prefix matching runs both directions and the longest match wins.
+function matchRequestedCommittees(text, committees) {
+  const hits = [];
+  const rx = new RegExp(REQUEST_RE.source, "gi");
+  let m;
+  while ((m = rx.exec(text || "")) !== null) {
+    const chamber = (m[1] || "").toLowerCase();
+    const name = normCmte(m[2]);
+    let bestCode = null, bestLen = -1;
+    for (const code in committees) {
+      const info = committees[code];
+      const cn = normCmte(info.name);
+      if (!cn) continue;
+      if (chamber && info.chamber !== chamber) continue;
+      if ((name.startsWith(cn) || cn.startsWith(name)) && cn.length > bestLen) {
+        bestCode = code; bestLen = cn.length;
+      }
+    }
+    if (bestCode && !hits.includes(bestCode)) hits.push(bestCode);
+  }
+  return hits;
+}
+// CommitteeCode -> {introduced: [billKey], requested: [billKey]}
+function committeeBillIndex(session) {
+  return cached(`cmtebills:${session}`, async () => {
+    const [committees, measures, sponsorRows] = await Promise.all([
+      committeesMap(session), measuresMap(session),
+      fetchAll("MeasureSponsors", `SessionKey eq '${session}' and SponsorType eq 'Committee'`),
+    ]);
+    const idx = {};
+    const slot = c => (idx[c] ||= { introduced: [], requested: [] });
+    for (const r of sponsorRows) {
+      if (r.CommitteeCode) slot(r.CommitteeCode).introduced.push(key(r.MeasurePrefix, r.MeasureNumber));
+    }
+    for (const k in measures) {
+      const txt = measures[k].AtTheRequestOf || "";
+      if (!txt.toLowerCase().includes("committee")) continue;
+      for (const code of matchRequestedCommittees(txt, committees)) slot(code).requested.push(k);
+    }
+    return idx;
+  });
+}
+async function committeeSponsorList(session) {
+  const [idx, committees] = await Promise.all([committeeBillIndex(session), committeesMap(session)]);
+  const out = [];
+  for (const code in idx) {
+    const info = committees[code] || { name: code, chamber: "joint" };
+    const both = new Set([...idx[code].introduced, ...idx[code].requested]);
+    out.push({ code, name: info.name, chamber: info.chamber,
+      introduced: idx[code].introduced.length, requested: idx[code].requested.length,
+      total: both.size });
+  }
+  out.sort((a, b) => (a.name || "").toLowerCase().localeCompare((b.name || "").toLowerCase()));
+  return out;
+}
+// mode: 'introduced' | 'requested' | 'any'
+async function committeeBills(session, code, mode) {
+  const [idx, measures, committees] = await Promise.all([
+    committeeBillIndex(session), measuresMap(session), committeesMap(session)]);
+  const b = idx[code] || { introduced: [], requested: [] };
+  const intro = new Set(b.introduced), reqd = new Set(b.requested);
+  const union = new Set([...intro, ...reqd]);
+  const counts = { introduced: intro.size, requested: reqd.size, any: union.size };
+  const keys = mode === "introduced" ? intro : (mode === "requested" ? reqd : union);
+  const bills = [];
+  for (const k of keys) {
+    const m = measures[k] || {};
+    const [prefix, num] = k.split("|");
+    const roles = [];
+    if (intro.has(k)) roles.push("Introduced by");
+    if (reqd.has(k)) roles.push("At request of");
+    bills.push({
+      bill: `${prefix} ${num}`, prefix, number: Number(num),
+      url: billUrl(session, prefix, num),
+      catchline: m.CatchLine || "", status: m.CurrentLocation || "", chapter: m.ChapterNumber,
+      role: roles.join(" · "), requested_text: (m.AtTheRequestOf || "").trim(),
+    });
+  }
+  bills.sort((a, b2) => a.prefix.localeCompare(b2.prefix) || a.number - b2.number);
+  return { session, session_name: await sessionName(session), code,
+    name: (committees[code] || {}).name || code, mode, counts, bills };
+}
+
 // all sponsor rows for one legislator (targeted, fast)
 function sponsorRecords(session, code) {
   return cached(`sponrecs:${session}:${code}`, () => fetchAll("MeasureSponsors",

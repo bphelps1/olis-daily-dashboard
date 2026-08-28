@@ -64,7 +64,7 @@
     cache: {},            // key: tab|session|date -> data
     lastFetch: {},        // key -> timestamp
     resolved: null,       // {session, name} reported by the last fetch (for Auto mode)
-    sponsor: { code: '', mode: 'first', data: null },
+    sponsor: { kind: 'legislator', code: '', mode: 'first', data: null },
   };
 
   const tabBody = document.getElementById('tabBody');
@@ -375,63 +375,93 @@
   }
 
   // ── rendering: sponsor search ───────────────────────────────────────
-  const SPONSOR_MODES = [
+  const LEG_MODES = [
     ['first', 'First chief',  'primary sponsor — listed first'],
     ['chief', 'Chief',        'any chief sponsor'],
     ['any',   'All',          'chief or regular co-sponsor'],
   ];
+  const CMTE_MODES = [
+    ['introduced', 'Introduced by',  'the committee is the sponsor of record'],
+    ['requested',  'At request of',  'introduced at the request of this committee'],
+    ['any',        'All',            'either relationship'],
+  ];
+  const isCmte = () => state.sponsor.kind === 'committee';
+  const sponsorModes = () => isCmte() ? CMTE_MODES : LEG_MODES;
+  function defaultMode() { return isCmte() ? 'introduced' : 'first'; }
+  function sponsorLegend() {
+    return isCmte()
+      ? `<b>Introduced by</b> = the committee is the sponsor of record; <b>At request of</b> = introduced at that committee's request (usually interim committee work); <b>All</b> = either.`
+      : `<b>First chief</b> = the primary sponsor listed first on the bill; <b>Chief</b> = any chief sponsor; <b>All</b> includes regular co-sponsorships.`;
+  }
+
   async function sponsorUI() {
-    let roster = [], sessName = '';
+    let roster = [], cmtes = [], sessName = '';
     try {
       const r = await fetch(`/api/legislators?session=${state.session}`);
       const d = await r.json();
-      roster = d.legislators || []; sessName = d.session_name || '';
+      roster = d.legislators || []; cmtes = d.committees || []; sessName = d.session_name || '';
     } catch (e) { console.error(e); }
-    const sel = state.sponsor.code;
-    const opts = ['<option value="">Choose a legislator…</option>'].concat(
-      roster.map(l => `<option value="${esc(l.code)}"${l.code===sel?' selected':''}>${esc(l.name||l.code)} (${esc(l.party)}-${esc(l.chamber==='House'?'H':'S')}${l.district?' '+esc(l.district):''}) — ${esc(l.code)}</option>`)
-    ).join('');
-    const modeBtns = SPONSOR_MODES.map(([m, label, hint]) =>
+    const sel = state.sponsor.code, selKind = state.sponsor.kind;
+    const legOpts = roster.map(l => `<option value="L:${esc(l.code)}"${(selKind==='legislator'&&l.code===sel)?' selected':''}>${esc(l.name||l.code)} (${esc(l.party)}-${esc(l.chamber==='House'?'H':'S')}${l.district?' '+esc(l.district):''}) — ${esc(l.code)}</option>`).join('');
+    const cmteOpts = cmtes.map(c => `<option value="C:${esc(c.code)}"${(selKind==='committee'&&c.code===sel)?' selected':''}>${esc(c.name)} (${esc(c.code)}) — ${c.total} bill${c.total===1?'':'s'}</option>`).join('');
+    const opts = `<option value="">Choose a legislator or committee…</option>
+      <optgroup label="Legislators">${legOpts}</optgroup>
+      <optgroup label="Committees (bills introduced by / at the request of)">${cmteOpts}</optgroup>`;
+    const modeBtns = sponsorModes().map(([m, label, hint]) =>
       `<button class="btn btn-sm ${state.sponsor.mode===m?'btn-success':'btn-outline-secondary'} sponsor-mode" data-mode="${m}" title="${esc(hint)}">${label}<span class="mode-count" data-count="${m}"></span></button>`).join('');
     return `<div class="sponsor-wrap">
       <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
-        <select id="sponsorPick" class="form-select" style="max-width:420px">${opts}</select>
+        <select id="sponsorPick" class="form-select" style="max-width:460px">${opts}</select>
         <div class="btn-group" role="group">${modeBtns}</div>
       </div>
-      <div class="small text-muted mb-2">Sponsorships in <b>${esc(sessName)}</b>.
-        <b>First chief</b> = the primary sponsor listed first on the bill; <b>Chief</b> = any chief sponsor; <b>All</b> includes regular co-sponsorships.</div>
-      <div id="sponsorResults">${state.sponsor.data ? renderSponsorResults(state.sponsor.data) : '<div class="text-muted py-4 text-center">Pick a legislator to see their bills.</div>'}</div>
+      <div class="small text-muted mb-2">Sponsorships in <b>${esc(sessName)}</b>. <span id="sponsorLegend">${sponsorLegend()}</span></div>
+      <div id="sponsorResults">${state.sponsor.data ? renderSponsorResults(state.sponsor.data) : '<div class="text-muted py-4 text-center">Pick a legislator or committee to see their bills.</div>'}</div>
     </div>`;
+  }
+  function roleBadge(role) {
+    const cls = role === 'First chief' ? 'text-bg-success'
+      : role === 'Chief' ? 'text-bg-primary'
+      : role === 'Introduced by' ? 'text-bg-success'
+      : role === 'At request of' ? 'text-bg-info'
+      : 'text-bg-light text-dark';
+    return `<span class="badge ${cls}">${esc(role)}</span>`;
   }
   function renderSponsorResults(data) {
     if (data.error) return `<div class="alert alert-warning mb-0">${esc(data.error)}</div>`;
-    if (!data.code) return `<div class="text-muted py-4 text-center">Pick a legislator to see their bills.</div>`;
+    if (!data.code) return `<div class="text-muted py-4 text-center">Pick a legislator or committee to see their bills.</div>`;
+    const who = data.name ? `${data.name} (${data.code})` : data.code;
     if (!data.bills.length)
-      return `<div class="text-muted py-4 text-center">No bills for ${esc(data.code)} in this category.</div>`;
-    const rows = data.bills.map(b => `<tr>
-      <td class="text-nowrap"><a href="${b.url}" target="_blank" rel="noopener">${esc(b.bill)}</a></td>
-      <td>${esc(b.catchline)}</td>
-      <td class="text-nowrap"><span class="badge ${b.role==='First chief'?'text-bg-success':(b.role==='Chief'?'text-bg-primary':'text-bg-light text-dark')}">${esc(b.role)}</span></td>
-      <td class="small">${esc(b.status)}${b.chapter?` <span class="badge text-bg-dark">Ch. ${esc(String(b.chapter))}</span>`:''}</td>
-    </tr>`).join('');
-    return `<div class="small text-muted mb-2">${data.bills.length} bill${data.bills.length===1?'':'s'} — ${esc(data.code)}</div>
+      return `<div class="text-muted py-4 text-center">No bills for ${esc(who)} in this category.</div>`;
+    const rows = data.bills.map(b => {
+      const badges = String(b.role || '').split(' · ').filter(Boolean).map(roleBadge).join(' ');
+      const req = b.requested_text ? `<div class="req-text small text-muted">${esc(b.requested_text)}</div>` : '';
+      return `<tr>
+        <td class="text-nowrap"><a href="${b.url}" target="_blank" rel="noopener">${esc(b.bill)}</a></td>
+        <td>${esc(b.catchline)}${req}</td>
+        <td class="text-nowrap">${badges}</td>
+        <td class="small">${esc(b.status)}${b.chapter?` <span class="badge text-bg-dark">Ch. ${esc(String(b.chapter))}</span>`:''}</td>
+      </tr>`;
+    }).join('');
+    return `<div class="small text-muted mb-2">${data.bills.length} bill${data.bills.length===1?'':'s'} — ${esc(who)}</div>
       <div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0">
       <thead><tr><th>Bill</th><th>Catchline</th><th>Role</th><th>Status</th></tr></thead>
       <tbody>${rows}</tbody></table></div>`;
   }
   function paintSponsorCounts(counts) {
-    for (const [m] of SPONSOR_MODES) {
+    for (const [m] of sponsorModes()) {
       const el = document.querySelector(`.mode-count[data-count="${m}"]`);
       if (el) el.textContent = counts && counts[m] != null ? ` ${counts[m]}` : '';
     }
   }
   async function runSponsorSearch() {
     const box = document.getElementById('sponsorResults');
-    if (!state.sponsor.code) { state.sponsor.data = null; if (box) box.innerHTML = '<div class="text-muted py-4 text-center">Pick a legislator to see their bills.</div>'; paintSponsorCounts(null); return; }
+    if (!state.sponsor.code) { state.sponsor.data = null; if (box) box.innerHTML = '<div class="text-muted py-4 text-center">Pick a legislator or committee to see their bills.</div>'; paintSponsorCounts(null); return; }
     if (box) box.innerHTML = `<div class="d-flex align-items-center gap-2 text-muted py-4 justify-content-center"><div class="spinner-border spinner-border-sm"></div> Loading sponsorships…</div>`;
     try {
-      const r = await fetch(`/api/sponsor?session=${state.session}&code=${encodeURIComponent(state.sponsor.code)}&mode=${state.sponsor.mode}`);
-      const data = await r.json();
+      const url = isCmte()
+        ? `/api/committee-bills/${encodeURIComponent(state.sponsor.code)}?session=${state.session}&mode=${state.sponsor.mode}`
+        : `/api/sponsor?session=${state.session}&code=${encodeURIComponent(state.sponsor.code)}&mode=${state.sponsor.mode}`;
+      const data = await (await fetch(url)).json();
       state.sponsor.data = data;
       document.getElementById('sponsorResults').innerHTML = renderSponsorResults(data);
       paintSponsorCounts(data.counts);
@@ -439,6 +469,14 @@
       console.error(e);
       document.getElementById('sponsorResults').innerHTML = `<div class="alert alert-warning mb-0">Could not load sponsorships.</div>`;
     }
+  }
+  // repaint mode buttons + legend when switching between legislator and committee
+  function refreshSponsorModes() {
+    const group = document.querySelector('.sponsor-wrap .btn-group');
+    if (group) group.innerHTML = sponsorModes().map(([m, label, hint]) =>
+      `<button class="btn btn-sm ${state.sponsor.mode===m?'btn-success':'btn-outline-secondary'} sponsor-mode" data-mode="${m}" title="${esc(hint)}">${label}<span class="mode-count" data-count="${m}"></span></button>`).join('');
+    const legend = document.getElementById('sponsorLegend');
+    if (legend) legend.innerHTML = sponsorLegend();
   }
 
   // ── rendering: session stats ────────────────────────────────────────
@@ -572,7 +610,16 @@
 
   // sponsor search (controls are injected into tabBody, so delegate)
   tabBody.addEventListener('change', e => {
-    if (e.target.id === 'sponsorPick') { state.sponsor.code = e.target.value; runSponsorSearch(); }
+    if (e.target.id !== 'sponsorPick') return;
+    const v = e.target.value;                    // "L:<code>" | "C:<code>" | ""
+    const wasCmte = state.sponsor.kind === 'committee';
+    state.sponsor.kind = v.startsWith('C:') ? 'committee' : 'legislator';
+    state.sponsor.code = v.slice(2);
+    if (wasCmte !== (state.sponsor.kind === 'committee')) {
+      state.sponsor.mode = defaultMode();        // mode sets differ by kind
+      refreshSponsorModes();
+    }
+    runSponsorSearch();
   });
   tabBody.addEventListener('click', e => {
     const btn = e.target.closest('.sponsor-mode');

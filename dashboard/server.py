@@ -721,7 +721,50 @@ def legislators():
     try:
         return jsonify({"session": session_key,
                         "session_name": api.session_name(session_key),
-                        "legislators": api.get_legislator_list(session_key)})
+                        "legislators": api.get_legislator_list(session_key),
+                        "committees": api.get_committee_sponsor_list(session_key)})
+    except requests.RequestException as e:
+        return jsonify({"error": f"Data unavailable — {e}"}), 502
+
+
+@app.route("/api/committee-bills/<code>")
+def committee_bills(code):
+    """Bills a committee introduced and/or that were introduced at its request.
+    mode: introduced | requested | any"""
+    session_key = _sponsor_session()
+    mode = (request.args.get("mode") or "introduced").strip().lower()
+    if mode not in ("introduced", "requested", "any"):
+        mode = "introduced"
+    try:
+        buckets = api.get_committee_bill_index(session_key).get(
+            code, {"introduced": [], "requested": []})
+        measures = api.get_measures_map(session_key)
+        intro, reqd = set(buckets["introduced"]), set(buckets["requested"])
+        counts = {"introduced": len(intro), "requested": len(reqd),
+                  "any": len(intro | reqd)}
+        keys = {"introduced": intro, "requested": reqd, "any": intro | reqd}[mode]
+        bills = []
+        for k in keys:
+            m = measures.get(k, {})
+            roles = []
+            if k in intro:
+                roles.append("Introduced by")
+            if k in reqd:
+                roles.append("At request of")
+            bills.append({
+                "bill": f"{k[0]} {k[1]}", "prefix": k[0], "number": k[1],
+                "url": api.bill_url(session_key, k[0], k[1]),
+                "catchline": m.get("CatchLine") or "",
+                "status": m.get("CurrentLocation") or "",
+                "chapter": m.get("ChapterNumber"),
+                "role": " · ".join(roles),
+                "requested_text": (m.get("AtTheRequestOf") or "").strip(),
+            })
+        bills.sort(key=lambda b: (b["prefix"], b["number"]))
+        name = api.get_committees_map(session_key).get(code, {}).get("name", code)
+        return jsonify({"session": session_key, "session_name": api.session_name(session_key),
+                        "code": code, "name": name, "mode": mode,
+                        "counts": counts, "bills": bills})
     except requests.RequestException as e:
         return jsonify({"error": f"Data unavailable — {e}"}), 502
 

@@ -188,6 +188,11 @@ table.table td:nth-child(5) {
   font-variant-numeric: tabular-nums;
 }
 .sponsor-wrap table td:nth-child(2) { min-width: 260px; }
+.sponsor-wrap .req-text {
+  margin-top: 0.15rem;
+  font-style: italic;
+  opacity: 0.85;
+}
 .bd-caveat {
   font-size: 0.75rem;
   color: #8a6d3b;

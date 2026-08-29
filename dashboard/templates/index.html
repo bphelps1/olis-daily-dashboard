@@ -413,6 +413,7 @@
       <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
         <select id="sponsorPick" class="form-select" style="max-width:460px">${opts}</select>
         <div class="btn-group" role="group">${modeBtns}</div>
+        <button id="sponsorExport" class="btn btn-sm btn-outline-dark" disabled title="Download the bills shown below as a CSV (opens in Excel)">⬇ Export CSV</button>
       </div>
       <div class="small text-muted mb-2">Sponsorships in <b>${esc(sessName)}</b>. <span id="sponsorLegend">${sponsorLegend()}</span></div>
       <div id="sponsorResults">${state.sponsor.data ? renderSponsorResults(state.sponsor.data) : '<div class="text-muted py-4 text-center">Pick a legislator or committee to see their bills.</div>'}</div>
@@ -455,7 +456,7 @@
   }
   async function runSponsorSearch() {
     const box = document.getElementById('sponsorResults');
-    if (!state.sponsor.code) { state.sponsor.data = null; if (box) box.innerHTML = '<div class="text-muted py-4 text-center">Pick a legislator or committee to see their bills.</div>'; paintSponsorCounts(null); return; }
+    if (!state.sponsor.code) { state.sponsor.data = null; if (box) box.innerHTML = '<div class="text-muted py-4 text-center">Pick a legislator or committee to see their bills.</div>'; paintSponsorCounts(null); refreshExportBtn(); return; }
     if (box) box.innerHTML = `<div class="d-flex align-items-center gap-2 text-muted py-4 justify-content-center"><div class="spinner-border spinner-border-sm"></div> Loading sponsorships…</div>`;
     try {
       const url = isCmte()
@@ -465,11 +466,57 @@
       state.sponsor.data = data;
       document.getElementById('sponsorResults').innerHTML = renderSponsorResults(data);
       paintSponsorCounts(data.counts);
+      refreshExportBtn();
     } catch (e) {
       console.error(e);
       document.getElementById('sponsorResults').innerHTML = `<div class="alert alert-warning mb-0">Could not load sponsorships.</div>`;
+      refreshExportBtn();
     }
   }
+  // ── sponsor CSV export ──────────────────────────────────────────────
+  function csvCell(v) {
+    const s = String(v ?? '');
+    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+  // built separately from the download so it can be inspected/tested
+  function sponsorCSV(d) {
+    if (!d || !d.bills || !d.bills.length) return '';
+    const withReq = d.bills.some(b => b.requested_text);
+    const header = ['Bill', 'Catchline', 'Role', 'Status', 'Chapter', 'OLIS URL'];
+    if (withReq) header.push('At the request of');
+    const rows = d.bills.map(b => {
+      const r = [b.bill, b.catchline, b.role, b.status, b.chapter ?? '', b.url];
+      if (withReq) r.push(b.requested_text || '');
+      return r;
+    });
+    return [header, ...rows].map(r => r.map(csvCell).join(',')).join('\r\n');
+  }
+  function sponsorCSVName(d) {
+    const modeLabel = (sponsorModes().find(m => m[0] === d.mode) || [null, d.mode])[1];
+    const safe = s => String(s || '').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '');
+    return `${safe(d.session)}_${safe(d.name || d.code)}_${safe(modeLabel)}.csv`;
+  }
+  function exportSponsorCSV() {
+    const d = state.sponsor.data;
+    const csv = sponsorCSV(d);
+    if (!csv) return;
+    // BOM keeps Excel happy with UTF-8 names (e.g. Muñoz, Pineros y Campesinos)
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = sponsorCSVName(d);
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
+  }
+  function refreshExportBtn() {
+    const btn = document.getElementById('sponsorExport');
+    if (!btn) return;
+    const n = state.sponsor.data && state.sponsor.data.bills ? state.sponsor.data.bills.length : 0;
+    btn.disabled = !n;
+    btn.textContent = n ? `⬇ Export CSV (${n})` : '⬇ Export CSV';
+  }
+
   // repaint mode buttons + legend when switching between legislator and committee
   function refreshSponsorModes() {
     const group = document.querySelector('.sponsor-wrap .btn-group');
@@ -554,6 +601,7 @@
       tabBody.innerHTML = `<div class="d-flex align-items-center gap-2 text-muted py-4 justify-content-center"><div class="spinner-border spinner-border-sm"></div> Loading roster…</div>`;
       tabBody.innerHTML = await sponsorUI();
       paintSponsorCounts(state.sponsor.data ? state.sponsor.data.counts : null);
+      refreshExportBtn();
       return;
     }
     const key = cacheKey(tab);
@@ -622,6 +670,7 @@
     runSponsorSearch();
   });
   tabBody.addEventListener('click', e => {
+    if (e.target.closest('#sponsorExport')) { exportSponsorCSV(); return; }
     const btn = e.target.closest('.sponsor-mode');
     if (!btn) return;
     state.sponsor.mode = btn.dataset.mode;

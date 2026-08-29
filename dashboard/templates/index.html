@@ -401,6 +401,13 @@
       const d = await r.json();
       roster = d.legislators || []; cmtes = d.committees || []; sessName = d.session_name || '';
     } catch (e) { console.error(e); }
+    // rosters differ between sessions — drop a selection that no longer exists
+    if (state.sponsor.code) {
+      const stillThere = state.sponsor.kind === 'committee'
+        ? cmtes.some(c => c.code === state.sponsor.code)
+        : roster.some(l => l.code === state.sponsor.code);
+      if (!stillThere) { state.sponsor.code = ''; state.sponsor.data = null; }
+    }
     const sel = state.sponsor.code, selKind = state.sponsor.kind;
     const legOpts = roster.map(l => `<option value="L:${esc(l.code)}"${(selKind==='legislator'&&l.code===sel)?' selected':''}>${esc(l.name||l.code)} (${esc(l.party)}-${esc(l.chamber==='House'?'H':'S')}${l.district?' '+esc(l.district):''}) — ${esc(l.code)}</option>`).join('');
     const cmteOpts = cmtes.map(c => `<option value="C:${esc(c.code)}"${(selKind==='committee'&&c.code===sel)?' selected':''}>${esc(c.name)} (${esc(c.code)}) — ${c.total} bill${c.total===1?'':'s'}</option>`).join('');
@@ -602,6 +609,8 @@
       tabBody.innerHTML = await sponsorUI();
       paintSponsorCounts(state.sponsor.data ? state.sponsor.data.counts : null);
       refreshExportBtn();
+      // selection survived a session change but its results were dropped -> reload
+      if (state.sponsor.code && !state.sponsor.data) runSponsorSearch();
       return;
     }
     const key = cacheKey(tab);
@@ -640,8 +649,12 @@
 
   function resetAndReload() {
     state.cache = {};
+    const prevSession = state.session;
     state.session = document.getElementById('session').value;
     state.date = document.getElementById('date').value;
+    // Sponsor results live outside state.cache and are session-scoped, so a
+    // session change must drop them or the old session's bills linger.
+    if (state.session !== prevSession) state.sponsor.data = null;
     loadTab(state.activeTab, true);
   }
 

@@ -263,6 +263,8 @@ function legislatorList(session) {
 //   introduced by  -> MeasureSponsors.SponsorType === 'Committee' (+ CommitteeCode)
 //   at the request -> Measures.AtTheRequestOf text names an interim/other committee
 const REQUEST_RE = /(house|senate|joint)?\s*(?:interim\s+)?committee on\s+(.+?)(?:\s+for\s+|\)|$)/gi;
+// collapse the stray tabs/newlines OLIS leaves in title fields
+function cleanWs(s) { return String(s || "").replace(/\s+/g, " ").trim(); }
 function normCmte(s) {
   return String(s || "").toLowerCase().replace(/\s+/g, " ").replace(/[^a-z0-9 ]/g, " ")
     .replace(/\s+/g, " ").trim();
@@ -343,6 +345,7 @@ async function committeeBills(session, code, mode) {
     bills.push({
       bill: `${prefix} ${num}`, prefix, number: Number(num),
       url: billUrl(session, prefix, num),
+      title: cleanWs(m.RelatingTo),                  // formal "Relating to…" title
       catchline: m.CatchLine || "", status: m.CurrentLocation || "", chapter: m.ChapterNumber,
       role: roles.join(" · "), requested_text: (m.AtTheRequestOf || "").trim(),
     });
@@ -378,6 +381,7 @@ async function sponsorSearch(session, code, mode) {
     bills.push({
       bill: `${r.MeasurePrefix} ${r.MeasureNumber}`, prefix: r.MeasurePrefix, number: r.MeasureNumber,
       url: billUrl(session, r.MeasurePrefix, r.MeasureNumber),
+      title: cleanWs(m.RelatingTo),                  // formal "Relating to…" title
       catchline: m.CatchLine || "", status: m.CurrentLocation || "", chapter: m.ChapterNumber,
       role: isFirst ? "First chief" : (isChief ? "Chief" : "Regular"),
       sponsor_type: r.SponsorType || "",

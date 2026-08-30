@@ -708,6 +708,11 @@ def search():
 SPONSOR_MODES = ("first", "chief", "any")
 
 
+def _clean_ws(s: str | None) -> str:
+    """Collapse the stray tabs/newlines OLIS leaves in title fields."""
+    return re.sub(r"\s+", " ", (s or "")).strip()
+
+
 def _sponsor_session() -> str:
     """Sponsors are per-session; 'auto' uses the latest regular session (the
     interim has no measures)."""
@@ -754,6 +759,7 @@ def committee_bills(code):
             bills.append({
                 "bill": f"{k[0]} {k[1]}", "prefix": k[0], "number": k[1],
                 "url": api.bill_url(session_key, k[0], k[1]),
+                "title": _clean_ws(m.get("RelatingTo")),   # formal "Relating to…" title
                 "catchline": m.get("CatchLine") or "",
                 "status": m.get("CurrentLocation") or "",
                 "chapter": m.get("ChapterNumber"),
@@ -803,6 +809,7 @@ def sponsor():
             bills.append({
                 "bill": f"{k[0]} {k[1]}", "prefix": k[0], "number": k[1],
                 "url": api.bill_url(session_key, k[0], k[1]),
+                "title": _clean_ws(m.get("RelatingTo")),   # formal "Relating to…" title
                 "catchline": m.get("CatchLine") or "",
                 "status": m.get("CurrentLocation") or "",
                 "chapter": m.get("ChapterNumber"),

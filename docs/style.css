@@ -187,7 +187,9 @@ table.table td:nth-child(5) {
   opacity: 0.75;
   font-variant-numeric: tabular-nums;
 }
-.sponsor-wrap table td:nth-child(2) { min-width: 260px; }
+.sponsor-wrap table td:nth-child(2) { min-width: 190px; max-width: 300px; }  /* Title */
+.sponsor-wrap table td:nth-child(3) { min-width: 260px; }                    /* Catchline */
+.sponsor-wrap .bill-title { font-size: 0.9em; }
 .sponsor-wrap .req-text {
   margin-top: 0.15rem;
   font-style: italic;

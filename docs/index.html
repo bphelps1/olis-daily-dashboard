@@ -434,6 +434,7 @@
       const req = b.requested_text ? `<div class="req-text small text-muted">${esc(b.requested_text)}</div>` : '';
       return `<tr>
         <td class="text-nowrap"><a href="${b.url}" target="_blank" rel="noopener">${esc(b.bill)}</a></td>
+        <td class="bill-title">${esc(b.title)}</td>
         <td>${esc(b.catchline)}${req}</td>
         <td class="text-nowrap">${badges}</td>
         <td class="small">${esc(b.status)}${b.chapter?` <span class="badge text-bg-dark">Ch. ${esc(String(b.chapter))}</span>`:''}</td>
@@ -441,7 +442,7 @@
     }).join('');
     return `<div class="small text-muted mb-2">${data.bills.length} bill${data.bills.length===1?'':'s'} — ${esc(who)}</div>
       <div class="table-responsive"><table class="table table-sm table-hover align-middle mb-0">
-      <thead><tr><th>Bill</th><th>Catchline</th><th>Role</th><th>Status</th></tr></thead>
+      <thead><tr><th>Bill</th><th>Title</th><th>Catchline</th><th>Role</th><th>Status</th></tr></thead>
       <tbody>${rows}</tbody></table></div>`;
   }
   function paintSponsorCounts(counts) {
@@ -478,10 +479,10 @@
   function sponsorCSV(d) {
     if (!d || !d.bills || !d.bills.length) return '';
     const withReq = d.bills.some(b => b.requested_text);
-    const header = ['Bill', 'Catchline', 'Role', 'Status', 'Chapter', 'OLIS URL'];
+    const header = ['Bill', 'Title', 'Catchline', 'Role', 'Status', 'Chapter', 'OLIS URL'];
     if (withReq) header.push('At the request of');
     const rows = d.bills.map(b => {
-      const r = [b.bill, b.catchline, b.role, b.status, b.chapter ?? '', b.url];
+      const r = [b.bill, b.title, b.catchline, b.role, b.status, b.chapter ?? '', b.url];
       if (withReq) r.push(b.requested_text || '');
       return r;
     });

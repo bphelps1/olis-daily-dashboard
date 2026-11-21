@@ -695,41 +695,145 @@ function snippetAround(comments, re) {
   const start = Math.max(0, i - 60), end = Math.min(c.length, i + m[0].length + 90);
   return (start > 0 ? "…" : "") + c.slice(start, end) + (end < c.length ? "…" : "");
 }
-async function searchTopics(term) {
-  term = (term || "").trim();
-  if (!term) return { query: "", total: 0, meetings: [] };
-  const q = term.replace(/'/g, "''");                      // OData escapes ' as ''
-  const data = await odata("CommitteeAgendaItems", {
-    "$filter": `substringof('${q}', Comments)`,
-    "$orderby": "MeetingDate desc",
-    "$top": "1000",
-    "$inlinecount": "allpages",
+//
+// A hearing's subject matter is spread over three endpoints, and a topic can
+// appear in any one of them without appearing in the others:
+//
+//   CommitteeAgendaItems.Comments           the printed agenda text
+//   CommitteeMeetingDocuments.ExhibitTitle  meeting materials / exhibits
+//   CommitteePublicTestimonies              who submitted testimony, for whom
+//
+// Searching only the agenda text silently misses hearings — e.g. Edunomics Lab
+// presented to JWMED on 2025-01-28, but the agenda item reads only "School
+// Funding - Getting the most from K12 funds…"; the name is in the exhibit title
+// "School Funding - Edunomics Lab Presentation". Hence we search all three.
+const SEARCH_SOURCES = ["agenda", "material", "testimony"];
+const SEARCH_SOURCE_LABEL = { agenda: "agenda", material: "materials", testimony: "testimony" };
+const SEARCH_CAP = 3000;              // per-source hard ceiling (3 pages of 1000)
+
+// First page + however many further pages the match count calls for (fetched in
+// parallel), capped at SEARCH_CAP rows.
+async function searchSource(endpoint, filter, orderby, cap) {
+  const first = await odata(endpoint, {
+    "$filter": filter, "$orderby": orderby,
+    "$top": String(PAGE), "$inlinecount": "allpages",
   });
-  const rows = data.value || [];
-  const total = parseInt(data["odata.count"] || rows.length, 10) || rows.length;
-  const committees = await globalCommittees();
+  const rows = first.value || [];
+  const total = parseInt(first["odata.count"] ?? rows.length, 10) || rows.length;
+  const wanted = Math.min(total, cap);
+  if (wanted > rows.length) {
+    const skips = [];
+    for (let s = PAGE; s < wanted; s += PAGE) skips.push(s);
+    const pages = await Promise.all(skips.map(skip => odata(endpoint, {
+      "$filter": filter, "$orderby": orderby,
+      "$top": String(PAGE), "$skip": String(skip),
+    })));
+    for (const pg of pages) rows.push(...(pg.value || []));
+  }
+  return { rows: rows.slice(0, cap), total };
+}
+
+async function searchTopics(term, sources) {
+  term = (term || "").trim();
+  sources = (sources && sources.length ? sources : SEARCH_SOURCES)
+    .filter(s => SEARCH_SOURCES.includes(s));
+  if (!sources.length) sources = SEARCH_SOURCES.slice();
+  if (!term) return { query: "", total: 0, totals: {}, sources, meetings: [] };
+  const q = term.replace(/'/g, "''");                      // OData escapes ' as ''
+  const PLANS = {
+    agenda:    ["CommitteeAgendaItems", `substringof('${q}', Comments)`],
+    material:  ["CommitteeMeetingDocuments", `substringof('${q}', ExhibitTitle)`],
+    testimony: ["CommitteePublicTestimonies",
+                `substringof('${q}', Organization) or substringof('${q}', BehalfOf)`],
+  };
+
+  const [committees, ...results] = await Promise.all([
+    globalCommittees(),
+    // one dead endpoint must not kill the whole search
+    ...sources.map(s => searchSource(PLANS[s][0], PLANS[s][1], "MeetingDate desc", SEARCH_CAP)
+      .catch(e => { console.error(`search ${s}`, e); return { rows: [], total: 0 }; })),
+  ]);
+
+  const hits = [];
+  const totals = {};
+  sources.forEach((source, i) => {
+    const { rows, total } = results[i];
+    totals[source] = total;
+    for (const r of rows) {
+      const hit = {
+        source,
+        session: r.SessionKey,
+        meetingDate: r.MeetingDate || "",
+        prefix: r.MeasurePrefix,
+        number: r.MeasureNumber,
+        docUrl: null,
+        submitter: null,
+        // 'CommitteCode' (sic) on agenda items only; the other two spell it right
+        code: r.CommitteeCode || r.CommitteCode,
+      };
+      if (source === "agenda") {
+        hit.text = r.Comments;
+      } else if (source === "material") {
+        hit.text = r.ExhibitTitle;
+        hit.docUrl = r.DocumentUrl;
+      } else {
+        const who = [r.Organization, r.BehalfOf]
+          .map(x => (x || "").trim()).filter(Boolean);
+        hit.text = [...new Set(who)].join(" / ");
+        hit.submitter = [r.SubmitterFirstName, r.SubmitterLastName]
+          .filter(Boolean).join(" ").trim();
+        // Testimony rows' DocumentUrl is just the session landing page, not the
+        // document — not worth linking.
+      }
+      if ((hit.text || "").trim() && hit.code) hits.push(hit);
+    }
+  });
+  hits.sort((a, b) => b.meetingDate.localeCompare(a.meetingDate));
+
   const re = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
   const meetings = new Map();
-  for (const r of rows) {
-    const code = r.CommitteCode;                            // note API typo (no 'e')
-    const mkey = `${r.SessionKey}|${code}|${(r.MeetingDate || "").slice(0, 16)}`;
+  for (const r of hits) {
+    const mkey = `${r.session}|${r.code}|${r.meetingDate.slice(0, 16)}`;
     if (!meetings.has(mkey)) {
       meetings.set(mkey, {
-        session: r.SessionKey, code,
-        committee: committees[`${r.SessionKey}|${code}`] || committees[code] || code,
-        date: (r.MeetingDate || "").slice(0, 10),
-        agendaUrl: agendaUrl(r.SessionKey, code, r.MeetingDate),
+        session: r.session, code: r.code,
+        committee: committees[`${r.session}|${r.code}`] || committees[r.code] || r.code,
+        date: r.meetingDate.slice(0, 10),
+        agendaUrl: agendaUrl(r.session, r.code, r.meetingDate),
         items: [],
       });
     }
-    const snip = snippetAround(r.Comments, re);
-    const bill = r.MeasurePrefix ? `${r.MeasurePrefix} ${r.MeasureNumber}` : null;
-    const url = bill ? billUrl(r.SessionKey, r.MeasurePrefix, r.MeasureNumber) : null;
+    const snip = snippetAround(r.text, re);
+    if (!snip) continue;
+    const bill = r.prefix ? `${r.prefix} ${r.number}` : null;
     const m = meetings.get(mkey);
-    if (snip && !m.items.some(it => it.snippet === snip)) m.items.push({ bill, url, snippet: snip });
+    // One testimony row per submitter makes for a wall of near-identical lines;
+    // collapse them per (bill, organisation) and keep the names.
+    const same = m.items.find(it => it.source === r.source && it.snippet === snip
+                                    && it.bill === bill);
+    if (same) {
+      const who = (r.submitter || "").trim();
+      if (who && !same.submitters.includes(who)) same.submitters.push(who);
+      continue;
+    }
+    m.items.push({
+      bill, snippet: snip,
+      url: bill ? billUrl(r.session, r.prefix, r.number) : null,
+      source: r.source,
+      sourceLabel: SEARCH_SOURCE_LABEL[r.source] || r.source,
+      docUrl: r.docUrl,
+      submitters: (r.submitter || "").trim() ? [r.submitter.trim()] : [],
+    });
   }
-  const list = [...meetings.values()];   // already newest-first from the query order
-  return { query: term, total, shown: list.length, capped: total > rows.length, meetings: list };
+  // agenda text first within a meeting, then materials, then testimony
+  const rank = Object.fromEntries(SEARCH_SOURCES.map((s, i) => [s, i]));
+  for (const m of meetings.values()) {
+    m.items.sort((a, b) => (rank[a.source] ?? 99) - (rank[b.source] ?? 99));
+  }
+  const list = [...meetings.values()];   // already newest-first from the hit sort
+  const total = Object.values(totals).reduce((a, b) => a + b, 0);
+  return { query: term, total, totals, sources, shown: list.length,
+           capped: total > hits.length, meetings: list };
 }
 
 // ── per-bill history: votes (by version) + testimony (by hearing/version) ─────

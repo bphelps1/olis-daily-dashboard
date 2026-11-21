@@ -200,3 +200,10 @@ table.table td:nth-child(5) {
   color: #8a6d3b;
   margin-top: 0.4rem;
 }
+
+/* ── topic search source toggles ───────────────────────────── */
+.search-wrap .src-count {
+  font-size: 0.75em;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}

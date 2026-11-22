@@ -664,41 +664,69 @@ def _snippet(comments, rx):
     return ("…" if start > 0 else "") + c[start:end] + ("…" if end < len(c) else "")
 
 
+SEARCH_SOURCE_LABEL = {"agenda": "agenda", "material": "materials",
+                       "testimony": "testimony"}
+
+
 @app.route("/api/search")
 def search():
     term = (request.args.get("q") or "").strip()
     if not term:
         return jsonify({"query": "", "total": 0, "meetings": []})
+    # ?sources=agenda,material,testimony — all three by default.
+    want = [s for s in (request.args.get("sources") or "").split(",") if s.strip()]
+    sources = tuple(s for s in want if s in api.SEARCH_SOURCES) or api.SEARCH_SOURCES
     try:
-        rows, total = api.search_agenda_comments(term)
+        hits, totals = api.search_agendas(term, sources=sources)
         committees = api.get_all_committees()
         rx = re.compile(re.escape(term), re.I)
         meetings: dict = {}
         order = []
-        for r in rows:
-            code = r.get("CommitteCode")            # API typo (no 'e')
-            mkey = f"{r.get('SessionKey')}|{code}|{(r.get('MeetingDate') or '')[:16]}"
+        for r in hits:
+            session, code = r["session"], r["code"]
+            mkey = f"{session}|{code}|{r['meeting_date'][:16]}"
             if mkey not in meetings:
                 meetings[mkey] = {
-                    "session": r.get("SessionKey"), "code": code,
-                    "committee": committees.get(f"{r.get('SessionKey')}|{code}")
+                    "session": session, "code": code,
+                    "committee": committees.get(f"{session}|{code}")
                     or committees.get(code) or code,
-                    "date": (r.get("MeetingDate") or "")[:10],
-                    "agendaUrl": _agenda_url(r.get("SessionKey"), code, r.get("MeetingDate")),
+                    "date": r["meeting_date"][:10],
+                    "agendaUrl": _agenda_url(session, code, r["meeting_date"]),
                     "items": [],
                 }
                 order.append(mkey)
-            snip = _snippet(r.get("Comments"), rx)
-            bill = (f"{r.get('MeasurePrefix')} {r.get('MeasureNumber')}"
-                    if r.get("MeasurePrefix") else None)
-            url = (api.bill_url(r.get("SessionKey"), r.get("MeasurePrefix"), r.get("MeasureNumber"))
-                   if bill else None)
+            snip = _snippet(r["text"], rx)
+            bill = f"{r['prefix']} {r['number']}" if r.get("prefix") else None
+            url = (api.bill_url(session, r["prefix"], r["number"]) if bill else None)
+            if not snip:
+                continue
             m = meetings[mkey]
-            if snip and not any(it["snippet"] == snip for it in m["items"]):
-                m["items"].append({"bill": bill, "url": url, "snippet": snip})
+            # One testimony row per submitter makes for a wall of near-identical
+            # lines; collapse them per (bill, organisation) and keep the names.
+            same = next((it for it in m["items"]
+                         if it["source"] == r["source"] and it["snippet"] == snip
+                         and it["bill"] == bill), None)
+            if same:
+                who = (r.get("submitter") or "").strip()
+                if who and who not in same["submitters"]:
+                    same["submitters"].append(who)
+                continue
+            m["items"].append({
+                "bill": bill, "url": url, "snippet": snip,
+                "source": r["source"],
+                "sourceLabel": SEARCH_SOURCE_LABEL.get(r["source"], r["source"]),
+                "docUrl": r.get("doc_url"),
+                "submitters": [w for w in [(r.get("submitter") or "").strip()] if w],
+            })
+        # agenda text first within a meeting, then materials, then testimony
+        rank = {s: i for i, s in enumerate(api.SEARCH_SOURCES)}
+        for m in meetings.values():
+            m["items"].sort(key=lambda it: rank.get(it["source"], 99))
         mlist = [meetings[k] for k in order]
+        total = sum(totals.values())
         return jsonify({"query": term, "total": total, "shown": len(mlist),
-                        "capped": total > len(rows), "meetings": mlist})
+                        "totals": totals, "sources": list(sources),
+                        "capped": total > len(hits), "meetings": mlist})
     except requests.RequestException as e:
         return jsonify({"error": f"Search failed — {e}"}), 502
 

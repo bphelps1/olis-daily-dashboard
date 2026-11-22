@@ -370,19 +370,138 @@ def get_all_committees() -> dict[str, str]:
     return cached_fetch("committees:__all__", fetch)
 
 
+# ── committee topic search ───────────────────────────────────────────────────
+#
+# A hearing's subject matter is spread over three endpoints, and a topic can
+# appear in any one of them without appearing in the others:
+#
+#   CommitteeAgendaItems.Comments        the printed agenda text
+#   CommitteeMeetingDocuments.ExhibitTitle  meeting materials / exhibits
+#   CommitteePublicTestimonies           who submitted testimony, for whom
+#
+# Searching only the agenda text silently misses hearings — e.g. Edunomics Lab
+# presented to JWMED on 2025-01-28, but the agenda item reads only "School
+# Funding - Getting the most from K12 funds…"; the name is in the exhibit title
+# "School Funding - Edunomics Lab Presentation". Hence we search all three.
+
+SEARCH_SOURCES = ("agenda", "material", "testimony")
+SEARCH_CAP = 3000          # per-source hard ceiling (3 pages of 1000)
+
+
+def _odata_lit(term: str) -> str:
+    return term.replace("'", "''")
+
+
+def _page_rows(data: dict) -> list[dict]:
+    return data.get("value", data.get("d", {}).get("results", []))
+
+
+def _page_total(data: dict, fallback: int) -> int:
+    raw = (data.get("odata.count") or data.get("d", {}).get("__count")
+           or data.get("__count"))
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _search_source(endpoint: str, filter_expr: str, orderby: str,
+                   cap: int) -> tuple[list[dict], int]:
+    """First page + however many further pages the match count calls for
+    (fetched in parallel), capped at `cap` rows."""
+    first = _fetch_page(endpoint, filter_expr, PAGE_SIZE, 0, orderby, True)
+    rows = _page_rows(first)
+    total = _page_total(first, len(rows))
+    wanted = min(total, cap)
+    if wanted > len(rows):
+        skips = list(range(PAGE_SIZE, wanted, PAGE_SIZE))
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            pages = ex.map(lambda s: _fetch_page(endpoint, filter_expr, PAGE_SIZE,
+                                                 s, orderby, False), skips)
+            for pg in pages:
+                rows.extend(_page_rows(pg))
+    return rows[:cap], total
+
+
+def search_agendas(term: str, sources=SEARCH_SOURCES,
+                   cap: int = SEARCH_CAP) -> tuple[list[dict], dict]:
+    """
+    Every committee hearing, across all sessions, whose agenda text, meeting
+    materials or public testimony mention `term` (the API's substringof is
+    case-insensitive).
+
+    Returns (hits, totals) where each hit is normalised to:
+        {'source', 'session', 'code', 'meeting_date', 'text',
+         'prefix', 'number', 'doc_url'}
+    and `totals` maps each source name to its full match count (which may
+    exceed the number of rows returned when `cap` kicks in).
+    """
+    q = _odata_lit(term)
+    plans = {
+        "agenda": ("CommitteeAgendaItems",
+                   f"substringof('{q}', Comments)", "MeetingDate desc"),
+        "material": ("CommitteeMeetingDocuments",
+                     f"substringof('{q}', ExhibitTitle)", "MeetingDate desc"),
+        "testimony": ("CommitteePublicTestimonies",
+                      f"substringof('{q}', Organization) "
+                      f"or substringof('{q}', BehalfOf)", "MeetingDate desc"),
+    }
+    jobs = [(s, *plans[s]) for s in sources if s in plans]
+    with ThreadPoolExecutor(max_workers=len(jobs) or 1) as ex:
+        futures = {s: ex.submit(_search_source, ep, fx, ob, cap)
+                   for s, ep, fx, ob in jobs}
+        results = {}
+        for s, f in futures.items():
+            try:
+                results[s] = f.result()
+            except requests.RequestException:
+                results[s] = ([], 0)      # one dead endpoint must not kill the search
+
+    hits: list[dict] = []
+    totals: dict[str, int] = {}
+    for source, (rows, total) in results.items():
+        totals[source] = total
+        for r in rows:
+            hit = {
+                "source": source,
+                "session": r.get("SessionKey"),
+                "meeting_date": r.get("MeetingDate") or "",
+                "prefix": r.get("MeasurePrefix"),
+                "number": r.get("MeasureNumber"),
+                "doc_url": None,
+                "submitter": None,
+                # 'CommitteCode' (sic) on agenda items only; the other two
+                # endpoints spell it correctly.
+                "code": r.get("CommitteeCode") or r.get("CommitteCode"),
+            }
+            if source == "agenda":
+                hit["text"] = r.get("Comments")
+            elif source == "material":
+                hit["text"] = r.get("ExhibitTitle")
+                hit["doc_url"] = r.get("DocumentUrl")
+            else:
+                org = (r.get("Organization") or "").strip()
+                behalf = (r.get("BehalfOf") or "").strip()
+                who = " / ".join(dict.fromkeys(x for x in (org, behalf) if x))
+                name = " ".join(x for x in (r.get("SubmitterFirstName"),
+                                            r.get("SubmitterLastName")) if x).strip()
+                hit["text"] = who
+                hit["submitter"] = name
+                # Testimony rows' DocumentUrl is just the session landing page,
+                # not the document — not worth linking.
+            if (hit["text"] or "").strip() and hit["code"]:
+                hits.append(hit)
+    hits.sort(key=lambda h: h["meeting_date"], reverse=True)
+    return hits, totals
+
+
 def search_agenda_comments(term: str, top: int = 1000) -> tuple[list[dict], int]:
-    """Committee agenda items whose Comments contain `term` (case-insensitive,
-    across all sessions), newest first, with the total match count."""
-    q = term.replace("'", "''")
+    """Agenda-text-only search, kept for callers that want the raw rows."""
+    q = _odata_lit(term)
     data = _fetch_page("CommitteeAgendaItems", f"substringof('{q}', Comments)",
                        top, 0, "MeetingDate desc", True)
-    rows = data.get("value", data.get("d", {}).get("results", []))
-    raw = data.get("odata.count") or data.get("d", {}).get("__count") or data.get("__count")
-    try:
-        total = int(raw)
-    except (TypeError, ValueError):
-        total = len(rows)
-    return rows, total
+    rows = _page_rows(data)
+    return rows, _page_total(data, len(rows))
 
 
 def get_committee_votes_by_bill(session_key: str) -> dict[tuple, list[dict]]:
